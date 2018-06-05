@@ -25,7 +25,7 @@ CFG_HW_UNQ_KEY_REQUEST ?=y
 include core/arch/arm/cpu/cortex-armv8-0.mk
 endif
 
-ifeq ($(PLATFORM_FLAVOR),ls1012frwy)
+ifeq ($(PLATFORM_FLAVOR),ls1012afrwy)
 CFG_HW_UNQ_KEY_REQUEST ?=y
 include core/arch/arm/cpu/cortex-armv8-0.mk
 endif

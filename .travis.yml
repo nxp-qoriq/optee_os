@@ -230,7 +230,7 @@ script:
   - $make PLATFORM=ls-ls1012ardb CFG_ARM64_core=y
 
   # NXP LS1012A-FRWY (ARMv8-A)
-  - $make PLATFORM=ls-ls1012frwy CFG_ARM64_core=y
+  - $make PLATFORM=ls-ls1012afrwy CFG_ARM64_core=y
 
   # Xilinx Zynq7000 ZC702
   - $make PLATFORM=zynq7k-zc702
