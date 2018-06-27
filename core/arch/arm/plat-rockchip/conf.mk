@@ -2,9 +2,8 @@ PLATFORM_FLAVOR ?= rk322x
 
 ifeq ($(PLATFORM_FLAVOR),rk322x)
 include ./core/arch/arm/cpu/cortex-a7.mk
+$(call force,CFG_TEE_CORE_NB_CORE,4)
 endif
-
-arm32-platform-aflags	+= -mfpu=neon
 
 $(call force,CFG_GENERIC_BOOT,y)
 $(call force,CFG_GIC,y)

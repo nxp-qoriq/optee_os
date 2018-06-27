@@ -1,38 +1,13 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef TEE_CRYP_UTL_H
 #define TEE_CRYP_UTL_H
 
 #include <tee_api_types.h>
-
-#if !defined(CFG_WITH_SOFTWARE_PRNG)
-TEE_Result get_rng_array(void *buffer, int len);
-#endif
+#include <crypto/crypto.h>
 
 TEE_Result tee_hash_get_digest_size(uint32_t algo, size_t *size);
 TEE_Result tee_hash_createdigest(uint32_t algo, const uint8_t *data,
@@ -48,12 +23,17 @@ TEE_Result tee_aes_cbc_cts_update(void *cbc_ctx, void *ecb_ctx,
 				  const uint8_t *data, size_t len,
 				  uint8_t *dst);
 
-TEE_Result tee_prng_add_entropy(const uint8_t *in, size_t len);
-void plat_prng_add_jitter_entropy(void);
 /*
- * The _norpc version must not invoke Normal World, or infinite recursion
- * may occur. As an exception however, using mutexes is allowed.
+ * plat_prng_add_jitter_entropy() - Adds jitter to RNG entropy pool
+ * @sid:	source ID, normally unique per location of the call
+ * @pnum:	pointer where the pool number for this @sid is stored
+ *
+ * Note that the supplied @sid controls (CRYPTO_RNG_SRC_IS_QUICK()) whether
+ * RPC is allowed to be performed or the event just will be queued for later
+ * consumption.
  */
-void plat_prng_add_jitter_entropy_norpc(void);
+void plat_prng_add_jitter_entropy(enum crypto_rng_src sid, unsigned int *pnum);
+
+void plat_rng_init(void);
 
 #endif

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (C) 2017 Marvell International Ltd.
  * All rights reserved.
@@ -28,6 +29,7 @@
 #ifndef PLATFORM_CONFIG_H
 #define PLATFORM_CONFIG_H
 
+#include <mm/generic_ram_layout.h>
 #include <util.h>
 
 /* Make stacks aligned to data cache line length */
@@ -40,13 +42,6 @@
 #else
 #error "32 bit mode not supported yet"
 #endif /*ARM64*/
-
-/* SDP enable but no pool defined: reserve 4MB for SDP tests */
-#if defined(CFG_SECURE_DATA_PATH) && !defined(CFG_TEE_SDP_MEM_BASE)
-#define CFG_TEE_SDP_MEM_TEST_SIZE	0x00400000
-#else
-#define CFG_TEE_SDP_MEM_TEST_SIZE	0
-#endif
 
 #if defined(PLATFORM_FLAVOR_armada7k8k)
 /*
@@ -71,15 +66,6 @@
 
 #define CONSOLE_UART_BASE	PLAT_MARVELL_BOOT_UART_BASE
 
-/* Location of trusted dram */
-#define TZDRAM_BASE		0x04400000
-#define TZDRAM_SIZE		0x00C00000
-
-#define CFG_TEE_CORE_NB_CORE	4
-
-#define CFG_SHMEM_START		(TZDRAM_BASE + TZDRAM_SIZE)
-#define CFG_SHMEM_SIZE		0x00400000
-
 #define GICC_OFFSET		0x10000
 #define GICD_OFFSET		0x0
 
@@ -89,41 +75,36 @@
 #define MC_SCR_REGISTER	0xF06F0204
 #define MC_SCR_REG_SIZE	SIZE_4K
 
+#elif defined(PLATFORM_FLAVOR_armada3700)
+/*
+ * armada3700 specifics.
+ */
+#define TEE_RES_CFG_8M
+
+#define MVEBU_REGS_BASE		0xD0000000
+
+/* GICv3 */
+#define MVEBU_GICD_BASE		0x1D00000
+#define MVEBU_GICR_BASE		0x1D40000
+#define MVEBU_GICC_BASE		0x1D80000
+
+#define GIC_DIST_BASE		(MVEBU_REGS_BASE + MVEBU_GICD_BASE)
+#define GIC_RDIS_BASE		(MVEBU_REGS_BASE + MVEBU_GICR_BASE)
+#define GIC_CPU_BASE		(MVEBU_REGS_BASE + MVEBU_GICC_BASE)
+
+#define GIC_BASE		GIC_DIST_BASE
+#define GICC_OFFSET		(0x80000)
+#define GICR_OFFSET		(0x40000)
+#define GICD_OFFSET		(0x0)
+
+/* UART */
+#define PLAT_MARVELL_BOOT_UART_BASE		(MVEBU_REGS_BASE + 0x12000)
+#define PLAT_MARVELL_BOOT_UART_CLK_IN_HZ	25804800
+#define MARVELL_CONSOLE_BAUDRATE		115200
+#define CONSOLE_UART_BASE	PLAT_MARVELL_BOOT_UART_BASE
+
 #else
 #error "Unknown platform flavor"
-#endif
-
-#define CFG_TEE_RAM_VA_SIZE	SIZE_4M
-
-#ifndef CFG_TEE_LOAD_ADDR
-#define CFG_TEE_LOAD_ADDR	CFG_TEE_RAM_START
-#endif
-
-/*
- * everything is in TZDRAM.
- * +------------------+
- * |        | TEE_RAM |
- * | TZDRAM +---------+
- * |        | TA_RAM  |
- * |        +---------+
- * |        | SDP RAM | (test pool, optional)
- * +--------+---------+
- */
-#define CFG_TEE_RAM_PH_SIZE	CFG_TEE_RAM_VA_SIZE
-#define CFG_TEE_RAM_START	TZDRAM_BASE
-#define CFG_TA_RAM_START	ROUNDUP(TZDRAM_BASE + CFG_TEE_RAM_VA_SIZE, \
-					CORE_MMU_DEVICE_SIZE)
-
-#define CFG_TA_RAM_SIZE		ROUNDDOWN(TZDRAM_SIZE - \
-					  (CFG_TA_RAM_START - TZDRAM_BASE) - \
-					  CFG_TEE_SDP_MEM_TEST_SIZE, \
-					  CORE_MMU_DEVICE_SIZE)
-
-/* Secure data path test memory pool: located at end of TA RAM */
-#if CFG_TEE_SDP_MEM_TEST_SIZE
-#define CFG_TEE_SDP_MEM_SIZE		CFG_TEE_SDP_MEM_TEST_SIZE
-#define CFG_TEE_SDP_MEM_BASE		(TZDRAM_BASE + TZDRAM_SIZE - \
-						CFG_TEE_SDP_MEM_SIZE)
 #endif
 
 #ifdef GIC_BASE

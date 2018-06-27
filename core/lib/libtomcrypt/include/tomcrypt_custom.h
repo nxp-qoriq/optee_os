@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2001-2007, Tom St Denis
  * Copyright (c) 2014, STMicroelectronics International N.V.
@@ -211,7 +212,7 @@
 #ifdef CFG_CRYPTO_CCM
    #define LTC_CCM_MODE
 #endif
-#ifdef CFG_CRYPTO_GCM
+#ifdef CFG_CRYPTO_AES_GCM_FROM_CRYPTOLIB
    #define LTC_GCM_MODE
 #endif
 

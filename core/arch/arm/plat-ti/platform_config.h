@@ -1,28 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2015, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef PLATFORM_CONFIG_H
@@ -42,7 +20,6 @@
 #define TZSRAM_SIZE     (256 * 1024)
 #endif /* CFG_WITH_PAGER */
 
-#define CFG_TEE_CORE_NB_CORE	2
 
 #define UART1_BASE      0x4806A000
 #define UART2_BASE      0x4806C000
@@ -78,8 +55,6 @@
 /* Location of protected DDR on the AM43xx platform */
 #define TZDRAM_BASE     0xbdb00000
 #define TZDRAM_SIZE     0x01c00000
-
-#define CFG_TEE_CORE_NB_CORE	1
 
 #define UART0_BASE      0x44E09000
 #define UART1_BASE      0x48022000
@@ -129,10 +104,10 @@
  * | TZSRAM | TEE_RAM  |
  * +--------+----------+
  */
-#define CFG_TEE_RAM_VA_SIZE     (1 * 1024 * 1024)
-#define CFG_TEE_RAM_PH_SIZE     TZSRAM_SIZE
-#define CFG_TEE_RAM_START       TZSRAM_BASE
-#define CFG_TEE_LOAD_ADDR       (CFG_TEE_RAM_START + 0x1000)
+#define TEE_RAM_VA_SIZE		(1 * 1024 * 1024)
+#define TEE_RAM_PH_SIZE		TZSRAM_SIZE
+#define TEE_RAM_START		TZSRAM_BASE
+#define TEE_LOAD_ADDR		(TEE_RAM_START + 0x1000)
 
 #else /* CFG_WITH_PAGER */
 /*
@@ -146,29 +121,31 @@
  * |        | TEE_RAM |
  * +--------+---------+
  */
-#define CFG_TEE_RAM_VA_SIZE     (1 * 1024 * 1024)
-#define CFG_TEE_RAM_PH_SIZE     CFG_TEE_RAM_VA_SIZE
-#define CFG_TEE_RAM_START       TZDRAM_BASE
-#define CFG_TEE_LOAD_ADDR       CFG_TEE_RAM_START
+#define TEE_RAM_VA_SIZE		(1 * 1024 * 1024)
+#define TEE_RAM_PH_SIZE		TEE_RAM_VA_SIZE
+#define TEE_RAM_START		TZDRAM_BASE
+#define TEE_LOAD_ADDR		TEE_RAM_START
 
 #endif /* CFG_WITH_PAGER */
 
-#if defined(CFG_SECURE_DATA_PATH)
-/* Locate SDP memory at the end of TZDRAM */
-#define CFG_TEE_SDP_MEM_BASE	(TZDRAM_BASE + \
-				TZDRAM_SIZE - \
-				CFG_TEE_SDP_MEM_SIZE)
-#endif
+#ifdef CFG_SECURE_DATA_PATH
+/* SDP memory at end of TZDRAM (config directives set CFG_TEE_SDP_MEM_SIZE) */
+#define TEE_SDP_TEST_MEM_BASE	(TZDRAM_BASE + TZDRAM_SIZE - \
+					CFG_TEE_SDP_MEM_SIZE)
+#define TEE_SDP_TEST_MEM_SIZE	CFG_TEE_SDP_MEM_SIZE
+#else
+#define TEE_SDP_TEST_MEM_SIZE	0
+#endif /*CFG_SECURE_DATA_PATH*/
 
-#define CFG_TA_RAM_START	ROUNDUP((TZDRAM_BASE + CFG_TEE_RAM_VA_SIZE), \
+#define TA_RAM_START		ROUNDUP((TZDRAM_BASE + TEE_RAM_VA_SIZE), \
 					CORE_MMU_DEVICE_SIZE)
 
-#define CFG_TA_RAM_SIZE		ROUNDDOWN((TZDRAM_SIZE - CFG_TEE_RAM_VA_SIZE) - \
-					  CFG_TEE_SDP_MEM_SIZE, \
+#define TA_RAM_SIZE		ROUNDDOWN((TZDRAM_SIZE - TEE_RAM_VA_SIZE) - \
+					  TEE_SDP_TEST_MEM_SIZE, \
 					  CORE_MMU_DEVICE_SIZE)
 
-/* Full GlobalPlatform test suite requires CFG_SHMEM_SIZE to be at least 2MB */
-#define CFG_SHMEM_START         (TZDRAM_BASE + TZDRAM_SIZE)
-#define CFG_SHMEM_SIZE          (4 * 1024 * 1024)
+/* Full GlobalPlatform test suite requires TEE_SHMEM_SIZE to be at least 2MB */
+#define TEE_SHMEM_START         (TZDRAM_BASE + TZDRAM_SIZE)
+#define TEE_SHMEM_SIZE          (4 * 1024 * 1024)
 
 #endif /*PLATFORM_CONFIG_H*/

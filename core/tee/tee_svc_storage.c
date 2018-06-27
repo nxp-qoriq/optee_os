@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <kernel/mutex.h>
@@ -41,12 +19,7 @@
 #include <tee/tee_svc_storage.h>
 #include <trace.h>
 
-/*
- * Returns the appropriate tee_file_operations for the specified storage ID.
- * The value TEE_STORAGE_PRIVATE will select the REE FS if available, otherwise
- * RPMB.
- */
-static const struct tee_file_operations *file_ops(uint32_t storage_id)
+const struct tee_file_operations *tee_svc_storage_file_ops(uint32_t storage_id)
 {
 
 	switch (storage_id) {
@@ -244,10 +217,12 @@ static TEE_Result tee_svc_storage_read_head(struct tee_obj *o)
 		bytes = head.attr_size;
 		res = fops->read(o->fh, sizeof(struct tee_svc_storage_head),
 				 attr, &bytes);
-		if (res != TEE_SUCCESS || bytes != head.attr_size) {
-			res = TEE_ERROR_CORRUPT_OBJECT;
+		if (res == TEE_ERROR_OUT_OF_MEMORY)
 			goto exit;
-		}
+		if (res != TEE_SUCCESS || bytes != head.attr_size)
+			res = TEE_ERROR_CORRUPT_OBJECT;
+		if (res)
+			goto exit;
 	}
 
 	res = tee_obj_attr_from_binary(o, attr, head.attr_size);
@@ -276,8 +251,9 @@ TEE_Result syscall_storage_obj_open(unsigned long storage_id, void *object_id,
 	char *file = NULL;
 	struct tee_pobj *po = NULL;
 	struct user_ta_ctx *utc;
-	const struct tee_file_operations *fops = file_ops(storage_id);
 	size_t attr_size;
+	const struct tee_file_operations *fops =
+			tee_svc_storage_file_ops(storage_id);
 
 	if (!fops) {
 		res = TEE_ERROR_ITEM_NOT_FOUND;
@@ -295,8 +271,7 @@ TEE_Result syscall_storage_obj_open(unsigned long storage_id, void *object_id,
 	utc = to_user_ta_ctx(sess->ctx);
 
 	res = tee_mmu_check_access_rights(utc,
-					  TEE_MEMORY_ACCESS_READ |
-					  TEE_MEMORY_ACCESS_ANY_OWNER,
+					  TEE_MEMORY_ACCESS_READ,
 					  (uaddr_t) object_id,
 					  object_id_len);
 	if (res != TEE_SUCCESS)
@@ -425,7 +400,8 @@ TEE_Result syscall_storage_obj_create(unsigned long storage_id, void *object_id,
 	struct tee_obj *attr_o = NULL;
 	struct tee_pobj *po = NULL;
 	struct user_ta_ctx *utc;
-	const struct tee_file_operations *fops = file_ops(storage_id);
+	const struct tee_file_operations *fops =
+			tee_svc_storage_file_ops(storage_id);
 
 	if (!fops)
 		return TEE_ERROR_ITEM_NOT_FOUND;
@@ -439,8 +415,7 @@ TEE_Result syscall_storage_obj_create(unsigned long storage_id, void *object_id,
 	utc = to_user_ta_ctx(sess->ctx);
 
 	res = tee_mmu_check_access_rights(utc,
-					  TEE_MEMORY_ACCESS_READ |
-					  TEE_MEMORY_ACCESS_ANY_OWNER,
+					  TEE_MEMORY_ACCESS_READ,
 					  (uaddr_t) object_id,
 					  object_id_len);
 	if (res != TEE_SUCCESS)
@@ -472,7 +447,6 @@ TEE_Result syscall_storage_obj_create(unsigned long storage_id, void *object_id,
 	    TEE_HANDLE_FLAG_PERSISTENT | TEE_HANDLE_FLAG_INITIALIZED;
 	o->flags = flags;
 	o->pobj = po;
-	po = NULL; /* o owns it from now on */
 
 	if (attr != TEE_HANDLE_NULL) {
 		res = tee_obj_get(utc, tee_svc_uref_to_vaddr(attr),
@@ -485,6 +459,7 @@ TEE_Result syscall_storage_obj_create(unsigned long storage_id, void *object_id,
 	if (res != TEE_SUCCESS)
 		goto err;
 
+	po = NULL; /* o owns it from now on */
 	tee_obj_add(utc, o);
 
 	res = tee_svc_copy_kaddr_to_uref(obj, o);
@@ -579,8 +554,7 @@ TEE_Result syscall_storage_obj_rename(unsigned long obj, void *object_id,
 	}
 
 	res = tee_mmu_check_access_rights(utc,
-					TEE_MEMORY_ACCESS_READ |
-					TEE_MEMORY_ACCESS_ANY_OWNER,
+					TEE_MEMORY_ACCESS_READ,
 					(uaddr_t) object_id, object_id_len);
 	if (res != TEE_SUCCESS)
 		goto exit;
@@ -705,7 +679,8 @@ TEE_Result syscall_storage_start_enum(unsigned long obj_enum,
 	struct tee_storage_enum *e;
 	TEE_Result res;
 	struct tee_ta_session *sess;
-	const struct tee_file_operations *fops = file_ops(storage_id);
+	const struct tee_file_operations *fops =
+			tee_svc_storage_file_ops(storage_id);
 
 	res = tee_ta_get_current_session(&sess);
 	if (res != TEE_SUCCESS)

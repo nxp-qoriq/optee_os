@@ -1,28 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 	/* Please keep them sorted based on the CRn register */
@@ -37,6 +15,10 @@
 
 	.macro read_mpidr reg
 	mrc	p15, 0, \reg, c0, c0, 5
+	.endm
+
+	.macro read_idpfr1 reg
+	mrc	p15, 0, \reg, c0, c1, 1
 	.endm
 
 	.macro read_sctlr reg
@@ -83,8 +65,16 @@
 	mcr	p15, 0, \reg, c2, c0, 0
 	.endm
 
+	.macro write_ttbr0_64bit reg0, reg1
+	mcrr	p15, 0, \reg0, \reg1, cr2
+	.endm
+
 	.macro read_ttbr0 reg
 	mrc	p15, 0, \reg, c2, c0, 0
+	.endm
+
+	.macro read_ttbr0_64bit reg0, reg1
+	mrrc	p15, 0, \reg0, \reg1, cr2
 	.endm
 
 	.macro write_ttbr1 reg
@@ -251,6 +241,18 @@
 
 	.macro read_tpidruro reg
 	mrc	p15, 0, \reg, c13, c0, 3
+	.endm
+
+	.macro write_tpidrprw reg
+	mcr	p15, 0, \reg, c13, c0, 4
+	.endm
+
+	.macro read_tpidrprw reg
+	mrc	p15, 0, \reg, c13, c0, 4
+	.endm
+
+	.macro write_cntvoff reg0, reg1
+	mcrr  p15, 4, \reg0, \reg1, c14
 	.endm
 
 	.macro read_clidr reg

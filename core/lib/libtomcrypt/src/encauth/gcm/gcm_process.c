@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2001-2007, Tom St Denis
  * All rights reserved.
@@ -74,6 +75,11 @@ int gcm_process(gcm_state *gcm,
  
    if ((err = cipher_is_valid(gcm->cipher)) != CRYPT_OK) {
       return err;
+   }
+
+   /* 0xFFFFFFFE0 = ((2^39)-256)/8 */
+   if (gcm->pttotlen / 8 + (ulong64)gcm->buflen + (ulong64)ptlen >= CONST64(0xFFFFFFFE0)) {
+      return CRYPT_INVALID_ARG;
    }
 
    /* in AAD mode? */

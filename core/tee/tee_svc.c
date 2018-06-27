@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <util.h>
 #include <kernel/tee_common_otp.h>
@@ -92,9 +70,9 @@ static const uint32_t ta_time_prot_lvl = 100;
 
 /* Elliptic Curve Cryptographic support */
 #ifdef CFG_CRYPTO_ECC
-static const uint32_t crypto_ecc_en = 1;
+static const bool crypto_ecc_en = 1;
 #else
-static const uint32_t crypto_ecc_en;
+static const bool crypto_ecc_en;
 #endif
 
 /*
@@ -550,13 +528,11 @@ static TEE_Result alloc_temp_sec_mem(size_t size, struct mobj **mobj,
 				     uint8_t **va)
 {
 	/* Allocate section in secure DDR */
-	mutex_lock(&tee_ta_mutex);
 #ifdef CFG_PAGED_USER_TA
 	*mobj = mobj_seccpy_shm_alloc(size);
 #else
 	*mobj = mobj_mm_alloc(mobj_sec_ddr, size, &tee_mm_sec_ddr);
 #endif
-	mutex_unlock(&tee_ta_mutex);
 	if (!*mobj)
 		return TEE_ERROR_GENERIC;
 
@@ -603,10 +579,7 @@ static TEE_Result tee_svc_copy_param(struct tee_ta_session *sess,
 	}
 
 	if (called_sess && is_pseudo_ta_ctx(called_sess->ctx)) {
-		/*
-		 * static TA, borrow the mapping of the calling
-		 * during this call.
-		 */
+		/* pseudo TA borrows the mapping of the calling TA */
 		return TEE_SUCCESS;
 	}
 
@@ -623,7 +596,7 @@ static TEE_Result tee_svc_copy_param(struct tee_ta_session *sess,
 			va = (void *)param->u[n].mem.offs;
 			s = param->u[n].mem.size;
 			if (!va) {
-				if (!s)
+				if (s)
 					return TEE_ERROR_BAD_PARAMETERS;
 				break;
 			}
@@ -805,24 +778,16 @@ TEE_Result syscall_open_ta_session(const TEE_UUID *dest,
 	if (res != TEE_SUCCESS)
 		goto function_exit;
 
-	/*
-	 * Find session of a multi session TA or a static TA
-	 * In such a case, there is no need to ask the supplicant for the TA
-	 * code
-	 */
 	res = tee_ta_open_session(&ret_o, &s, &utc->open_sessions, uuid,
 				  clnt_id, cancel_req_to, param);
+	tee_mmu_set_ctx(&utc->ctx);
 	if (res != TEE_SUCCESS)
 		goto function_exit;
 
 	res = tee_svc_update_out_param(sess, s, param, tmp_buf_va, usr_param);
 
 function_exit:
-	if (mobj_param) {
-		mutex_lock(&tee_ta_mutex);
-		mobj_free(mobj_param);
-		mutex_unlock(&tee_ta_mutex);
-	}
+	mobj_free(mobj_param);
 	if (res == TEE_SUCCESS)
 		tee_svc_copy_kaddr_to_uref(ta_sess, s);
 	tee_svc_copy_to_user(ret_orig, &ret_o, sizeof(ret_o));
@@ -910,11 +875,7 @@ TEE_Result syscall_invoke_ta_command(unsigned long ta_sess,
 
 function_exit:
 	tee_ta_put_session(called_sess);
-	if (mobj_param) {
-		mutex_lock(&tee_ta_mutex);
-		mobj_free(mobj_param);
-		mutex_unlock(&tee_ta_mutex);
-	}
+	mobj_free(mobj_param);
 	if (ret_orig)
 		tee_svc_copy_to_user(ret_orig, &ret_o, sizeof(ret_o));
 	return res;

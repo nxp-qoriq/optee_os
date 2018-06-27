@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: (BSD-2-Clause AND MIT) */
 /*
  * Copyright (c) 2014, Linaro Limited
  * All rights reserved.
@@ -48,23 +49,17 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <mm/core_mmu.h>
 #include <platform_config.h>
-
-#ifndef SMALL_PAGE_SIZE
-#define SMALL_PAGE_SIZE		4096
-#endif
-#ifndef ROUNDUP
-#define ROUNDUP(x, y)		((((x) + (y) - 1) / (y)) * (y))
-#define ROUNDDOWN(x, y)		(((x) / (y)) * (y))
-#endif
+#include <util.h>
 
 /*
  * TEE_RAM_VA_START:            The start virtual address of the TEE RAM
  * TEE_TEXT_VA_START:           The start virtual address of the OP-TEE text
  */
-#define TEE_RAM_VA_START                CFG_TEE_RAM_START
-#define TEE_TEXT_VA_START               (TEE_RAM_VA_START + \
-			(CFG_TEE_LOAD_ADDR - CFG_TEE_RAM_START))
+#define TEE_RAM_VA_START        TEE_RAM_START
+#define TEE_TEXT_VA_START       (TEE_RAM_VA_START + \
+					(TEE_LOAD_ADDR - TEE_RAM_START))
 
 OUTPUT_FORMAT(CFG_KERN_LINKER_FORMAT)
 OUTPUT_ARCH(CFG_KERN_LINKER_ARCH)
@@ -89,9 +84,10 @@ SECTIONS
 	__flatmap_unpg_rx_start = ROUNDDOWN(__text_start, SMALL_PAGE_SIZE);
 
 	.text : {
-		KEEP(*(.text.boot.vectab1))
-		KEEP(*(.text.boot.vectab2))
-		KEEP(*(.text.boot))
+		KEEP(*(.text._start))
+		KEEP(*(.text.init .text.plat_cpu_reset_early \
+		       .text.reset .text.reset_primary .text.unhandled_cpu \
+		       .text.__assert_flat_mapped_range))
 
 		. = ALIGN(8);
 		__initcall_start = .;
@@ -161,6 +157,10 @@ SECTIONS
 		__start_phys_nsec_ddr_section = . ;
 		KEEP(*(phys_nsec_ddr_section))
 		__end_phys_nsec_ddr_section = . ;
+		. = ALIGN(8);
+		__start_phys_ddr_overall_section = . ;
+		KEEP(*(phys_ddr_overall_section))
+		__end_phys_ddr_overall_section = . ;
 #endif
 		. = ALIGN(8);
 		__rodata_end = .;
@@ -309,6 +309,9 @@ SECTIONS
  * sections will go into the unpaged area.
  */
 #include <text_init.ld.S>
+		KEEP(*(.text.startup.*));
+		/* Make sure constructor functions are available during init */
+		KEEP(*(.text._GLOBAL__sub_*));
 		. = ALIGN(8);
 	}
 
@@ -332,6 +335,10 @@ SECTIONS
 		__start_phys_nsec_ddr_section = . ;
 		KEEP(*(phys_nsec_ddr_section))
 		__end_phys_nsec_ddr_section = . ;
+		. = ALIGN(8);
+		__start_phys_ddr_overall_section = . ;
+		KEEP(*(phys_ddr_overall_section))
+		__end_phys_ddr_overall_section = . ;
 		. = ALIGN(8);
 		__rodata_init_end = .;
 	}
@@ -392,25 +399,26 @@ SECTIONS
 
 	__init_mem_usage = __tmp_hashes_end - TEE_TEXT_VA_START;
 
-	ASSERT(CFG_TEE_LOAD_ADDR >= CFG_TEE_RAM_START,
+	ASSERT(TEE_LOAD_ADDR >= TEE_RAM_START,
 		"Load address before start of physical memory")
-	ASSERT(CFG_TEE_LOAD_ADDR < (CFG_TEE_RAM_START + CFG_TEE_RAM_PH_SIZE),
+	ASSERT(TEE_LOAD_ADDR < (TEE_RAM_START + TEE_RAM_PH_SIZE),
 		"Load address after end of physical memory")
-	ASSERT(__tmp_hashes_end < (TEE_RAM_VA_START + CFG_TEE_RAM_PH_SIZE),
+	ASSERT(__tmp_hashes_end < (TEE_RAM_VA_START + TEE_RAM_PH_SIZE),
 		"OP-TEE can't fit init part into available physical memory")
-	ASSERT((TEE_RAM_VA_START + CFG_TEE_RAM_PH_SIZE - __init_end) >
+	ASSERT((TEE_RAM_VA_START + TEE_RAM_PH_SIZE - __init_end) >
 		SMALL_PAGE_SIZE, "Too few free pages to initialize paging")
 
 
 #endif /*CFG_WITH_PAGER*/
 
 #ifdef CFG_CORE_SANITIZE_KADDRESS
-	. = TEE_RAM_VA_START + (CFG_TEE_RAM_VA_SIZE * 8) / 9 - 8;
+	. = TEE_RAM_VA_START + (TEE_RAM_VA_SIZE * 8) / 9 - 8;
 	. = ALIGN(8);
 	.asan_shadow : {
 		__asan_shadow_start = .;
-		. += CFG_TEE_RAM_VA_SIZE / 9;
+		. += TEE_RAM_VA_SIZE / 9;
 		__asan_shadow_end = .;
+		__asan_shadow_size = __asan_shadow_end - __asan_shadow_start;
 	}
 #endif /*CFG_CORE_SANITIZE_KADDRESS*/
 
@@ -424,9 +432,9 @@ SECTIONS
 	 * Guard against moving the location counter backwards in the assignment
 	 * below.
 	 */
-	ASSERT(. <= (TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE),
-		"CFG_TEE_RAM_VA_SIZE is too small")
-	. = TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE;
+	ASSERT(. <= (TEE_RAM_VA_START + TEE_RAM_VA_SIZE),
+		"TEE_RAM_VA_SIZE is too small")
+	. = TEE_RAM_VA_START + TEE_RAM_VA_SIZE;
 
 	_end_of_ram = .;
 
@@ -444,20 +452,19 @@ SECTIONS
 }
 
 /* Unpaged read-only memories */
-PROVIDE(__vcore_unpg_rx_start = __flatmap_unpg_rx_start);
-PROVIDE(__vcore_unpg_ro_start = __flatmap_unpg_ro_start);
+__vcore_unpg_rx_start = __flatmap_unpg_rx_start;
+__vcore_unpg_ro_start = __flatmap_unpg_ro_start;
 #ifdef CFG_CORE_RODATA_NOEXEC
-PROVIDE(__vcore_unpg_rx_size = __flatmap_unpg_rx_size);
-PROVIDE(__vcore_unpg_ro_size = __flatmap_unpg_ro_size);
+__vcore_unpg_rx_size = __flatmap_unpg_rx_size;
+__vcore_unpg_ro_size = __flatmap_unpg_ro_size;
 #else
-PROVIDE(__vcore_unpg_rx_size = __flatmap_unpg_rx_size +
-				__flatmap_unpg_ro_size);
-PROVIDE(__vcore_unpg_ro_size = 0);
+__vcore_unpg_rx_size = __flatmap_unpg_rx_size + __flatmap_unpg_ro_size;
+__vcore_unpg_ro_size = 0;
 #endif
 
 /* Unpaged read-write memory */
-PROVIDE(__vcore_unpg_rw_start = __flatmap_unpg_rw_start);
-PROVIDE(__vcore_unpg_rw_size = __flatmap_unpg_rw_size);
+__vcore_unpg_rw_start = __flatmap_unpg_rw_start;
+__vcore_unpg_rw_size = __flatmap_unpg_rw_size;
 
 #ifdef CFG_WITH_PAGER
 /*
@@ -466,20 +473,26 @@ PROVIDE(__vcore_unpg_rw_size = __flatmap_unpg_rw_size);
  * binary data after the firmware build sequence.
  */
 #define __FLATMAP_PAGER_TRAILING_SPACE	\
-	(CFG_TEE_RAM_START + CFG_TEE_RAM_PH_SIZE - \
+	(TEE_RAM_START + TEE_RAM_PH_SIZE - \
 		(__flatmap_init_ro_start + __flatmap_init_ro_size))
 
 /* Paged/init read-only memories */
-PROVIDE(__vcore_init_rx_start = __flatmap_init_rx_start);
-PROVIDE(__vcore_init_ro_start = __flatmap_init_ro_start);
+__vcore_init_rx_start = __flatmap_init_rx_start;
+__vcore_init_ro_start = __flatmap_init_ro_start;
 #ifdef CFG_CORE_RODATA_NOEXEC
-PROVIDE(__vcore_init_rx_size = __flatmap_init_rx_size);
-PROVIDE(__vcore_init_ro_size = __flatmap_init_ro_size +
-				__FLATMAP_PAGER_TRAILING_SPACE);
+__vcore_init_rx_size = __flatmap_init_rx_size;
+__vcore_init_ro_size = __flatmap_init_ro_size + __FLATMAP_PAGER_TRAILING_SPACE;
 #else
-PROVIDE(__vcore_init_rx_size = __flatmap_init_rx_size +
-				__flatmap_init_ro_size +
-				__FLATMAP_PAGER_TRAILING_SPACE);
-PROVIDE(__vcore_init_ro_size = 0);
+__vcore_init_rx_size = __flatmap_init_rx_size + __flatmap_init_ro_size +
+		       __FLATMAP_PAGER_TRAILING_SPACE;
+__vcore_init_ro_size = 0;
 #endif /* CFG_CORE_RODATA_NOEXEC */
 #endif /* CFG_WITH_PAGER */
+
+#ifdef CFG_CORE_SANITIZE_KADDRESS
+__asan_map_start = (__asan_shadow_start / SMALL_PAGE_SIZE) *
+		   SMALL_PAGE_SIZE;
+__asan_map_end = ((__asan_shadow_end - 1) / SMALL_PAGE_SIZE) *
+		 SMALL_PAGE_SIZE + SMALL_PAGE_SIZE;
+__asan_map_size = __asan_map_end - __asan_map_start;
+#endif /*CFG_CORE_SANITIZE_KADDRESS*/

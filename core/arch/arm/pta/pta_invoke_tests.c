@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <compiler.h>
@@ -409,7 +387,7 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 		uint32_t nCommandID, uint32_t nParamTypes,
 		TEE_Param pParams[TEE_NUM_PARAMS])
 {
-	DMSG("command entry point for pseudo ta \"%s\"", TA_NAME);
+	FMSG("command entry point for pseudo ta \"%s\"", TA_NAME);
 
 	switch (nCommandID) {
 	case PTA_INVOKE_TESTS_CMD_TRACE:
@@ -428,6 +406,8 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 	case PTA_INVOKE_TESTS_CMD_FS_HTREE:
 		return core_fs_htree_tests(nParamTypes, pParams);
 #endif
+	case PTA_INVOKE_TESTS_CMD_MUTEX:
+		return core_mutex_tests(nParamTypes, pParams);
 	default:
 		break;
 	}
@@ -435,7 +415,8 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 }
 
 pseudo_ta_register(.uuid = PTA_INVOKE_TESTS_UUID, .name = TA_NAME,
-		   .flags = PTA_DEFAULT_FLAGS | TA_FLAG_SECURE_DATA_PATH,
+		   .flags = PTA_DEFAULT_FLAGS | TA_FLAG_SECURE_DATA_PATH |
+			    TA_FLAG_CONCURRENT,
 		   .create_entry_point = create_ta,
 		   .destroy_entry_point = destroy_ta,
 		   .open_session_entry_point = open_session,

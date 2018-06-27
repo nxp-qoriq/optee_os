@@ -1,52 +1,29 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <assert.h>
-#include <tee/tee_cryp_provider.h>
-#include <tee/tee_cryp_utl.h>
-
-#include <tomcrypt.h>
+#include <crypto/aes-ccm.h>
+#include <crypto/aes-gcm.h>
+#include <crypto/crypto.h>
+#include <kernel/panic.h>
 #include <mpalib.h>
 #include <stdlib.h>
-#include <string.h>
-#include <utee_defines.h>
-#include <trace.h>
-#include <tee_api_types.h>
 #include <string_ext.h>
-#include <util.h>
-#include <kernel/panic.h>
+#include <string.h>
+#include <tee_api_types.h>
+#include <tee/tee_cryp_utl.h>
+#include <tomcrypt.h>
 #include "tomcrypt_mpa.h"
+#include <trace.h>
+#include <utee_defines.h>
+#include <util.h>
 
 #if defined(CFG_WITH_VFP)
 #include <tomcrypt_arm_neon.h>
 #include <kernel/thread.h>
 #endif
-
-#if !defined(CFG_WITH_SOFTWARE_PRNG)
 
 /* Random generator */
 static int prng_mpa_start(union Prng_state *prng __unused)
@@ -70,10 +47,10 @@ static int prng_mpa_ready(union Prng_state *prng __unused)
 static unsigned long prng_mpa_read(unsigned char *out, unsigned long outlen,
 				   union Prng_state *prng __unused)
 {
-	if (TEE_SUCCESS == get_rng_array(out, outlen))
-		return outlen;
-	else
+	if (crypto_rng_read(out, outlen))
 		return 0;
+
+	return outlen;
 }
 
 static int prng_mpa_done(union Prng_state *prng __unused)
@@ -113,69 +90,6 @@ static const struct ltc_prng_descriptor prng_mpa_desc = {
 	.test = &prng_mpa_test,
 };
 
-#endif /* !CFG_WITH_SOFTWARE_PRNG */
-
-struct tee_ltc_prng {
-	int index;
-	const char *name;
-	prng_state state;
-	bool inited;
-};
-
-static struct tee_ltc_prng _tee_ltc_prng =
-#if defined(CFG_WITH_SOFTWARE_PRNG)
-	{
-#if defined(_CFG_CRYPTO_WITH_FORTUNA_PRNG)
-		.name = "fortuna",
-#else
-		/*
-		 * we need AES and SHA256 for fortuna PRNG,
-		 * if the system configuration can't provide those,
-		 * fallback to RC4
-		 */
-		.name = "rc4",
-#endif
-	};
-#else
-	{
-		.name = "prng_mpa",
-	};
-#endif
-
-static struct tee_ltc_prng *tee_ltc_get_prng(void)
-{
-	return &_tee_ltc_prng;
-}
-
-static TEE_Result tee_ltc_prng_init(struct tee_ltc_prng *prng)
-{
-	int res;
-	int prng_index;
-
-	assert(prng);
-
-	prng_index = find_prng(prng->name);
-	if (prng_index == -1)
-		return TEE_ERROR_BAD_PARAMETERS;
-
-	if (!prng->inited) {
-		res = prng_descriptor[prng_index]->start(&prng->state);
-		if (res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-
-		plat_prng_add_jitter_entropy_norpc();
-
-		res = prng_descriptor[prng_index]->ready(&prng->state);
-		if (res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-
-		prng->index = prng_index;
-		prng->inited = true;
-	}
-
-	return TEE_SUCCESS;
-}
-
 /*
  * tee_ltc_reg_algs(): Registers
  *	- algorithms
@@ -210,16 +124,7 @@ static void tee_ltc_reg_algs(void)
 #if defined(CFG_CRYPTO_SHA512)
 	register_hash(&sha512_desc);
 #endif
-
-#if defined(CFG_WITH_SOFTWARE_PRNG)
-#if defined(_CFG_CRYPTO_WITH_FORTUNA_PRNG)
-	register_prng(&fortuna_desc);
-#else
-	register_prng(&rc4_desc);
-#endif
-#else
 	register_prng(&prng_mpa_desc);
-#endif
 }
 
 
@@ -400,7 +305,48 @@ static TEE_Result hash_get_ctx_size(uint32_t algo, size_t *size)
 	return TEE_SUCCESS;
 }
 
-static TEE_Result hash_init(void *ctx, uint32_t algo)
+TEE_Result crypto_hash_alloc_ctx(void **ctx_ret, uint32_t algo)
+{
+	TEE_Result res;
+	size_t ctx_size;
+	void *ctx;
+
+	res = hash_get_ctx_size(algo, &ctx_size);
+	if (res)
+		return res;
+
+	ctx = calloc(1, ctx_size);
+	if (!ctx)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*ctx_ret = ctx;
+	return TEE_SUCCESS;
+}
+
+void crypto_hash_free_ctx(void *ctx, uint32_t algo __unused)
+{
+	size_t ctx_size __maybe_unused;
+
+	/*
+	 * Check that it's a supported algo, or crypto_hash_alloc_ctx()
+	 * could never have succeded above.
+	 */
+	if (ctx)
+		assert(!hash_get_ctx_size(algo, &ctx_size));
+	free(ctx);
+}
+
+void crypto_hash_copy_state(void *dst_ctx, void *src_ctx, uint32_t algo)
+{
+	TEE_Result res __maybe_unused;
+	size_t ctx_size = 0;
+
+	res = hash_get_ctx_size(algo, &ctx_size);
+	assert(!res);
+	memcpy(dst_ctx, src_ctx, ctx_size);
+}
+
+TEE_Result crypto_hash_init(void *ctx, uint32_t algo)
 {
 	int ltc_res;
 	int ltc_hashindex;
@@ -415,7 +361,7 @@ static TEE_Result hash_init(void *ctx, uint32_t algo)
 		return TEE_ERROR_BAD_STATE;
 }
 
-static TEE_Result hash_update(void *ctx, uint32_t algo,
+TEE_Result crypto_hash_update(void *ctx, uint32_t algo,
 				      const uint8_t *data, size_t len)
 {
 	int ltc_res;
@@ -431,8 +377,8 @@ static TEE_Result hash_update(void *ctx, uint32_t algo,
 		return TEE_ERROR_BAD_STATE;
 }
 
-static TEE_Result hash_final(void *ctx, uint32_t algo, uint8_t *digest,
-				     size_t len)
+TEE_Result crypto_hash_final(void *ctx, uint32_t algo, uint8_t *digest,
+			     size_t len)
 {
 	int ltc_res;
 	int ltc_hashindex;
@@ -465,8 +411,7 @@ static TEE_Result hash_final(void *ctx, uint32_t algo, uint8_t *digest,
 
 	return TEE_SUCCESS;
 }
-
-#endif /* _CFG_CRYPTO_WITH_HASH */
+#endif /*_CFG_CRYPTO_WITH_HASH*/
 
 /******************************************************************************
  * Asymmetric algorithms
@@ -474,194 +419,77 @@ static TEE_Result hash_final(void *ctx, uint32_t algo, uint8_t *digest,
 
 #if defined(_CFG_CRYPTO_WITH_ACIPHER)
 
-#define LTC_MAX_BITS_PER_VARIABLE   (4096)
 #define LTC_VARIABLE_NUMBER         (50)
 
 #define LTC_MEMPOOL_U32_SIZE \
 	mpa_scratch_mem_size_in_U32(LTC_VARIABLE_NUMBER, \
-				    LTC_MAX_BITS_PER_VARIABLE)
+				    CFG_CORE_BIGNUM_MAX_BITS)
 
 #if defined(CFG_WITH_PAGER)
 #include <mm/tee_pager.h>
 #include <util.h>
 #include <mm/core_mmu.h>
 
-static uint32_t *_ltc_mempool_u32;
-
 /* allocate pageable_zi vmem for mpa scratch memory pool */
-static mpa_scratch_mem get_mpa_scratch_memory_pool(size_t *size_pool)
+static struct mempool *get_mpa_scratch_memory_pool(void)
 {
-	void *pool;
+	size_t size;
+	void *data;
 
-	*size_pool = ROUNDUP((LTC_MEMPOOL_U32_SIZE * sizeof(uint32_t)),
-			     SMALL_PAGE_SIZE);
-	_ltc_mempool_u32 = tee_pager_alloc(*size_pool, 0);
-	if (!_ltc_mempool_u32)
+	size = ROUNDUP((LTC_MEMPOOL_U32_SIZE * sizeof(uint32_t)),
+		        SMALL_PAGE_SIZE);
+	data = tee_pager_alloc(size, 0);
+	if (!data)
 		panic();
-	pool = (void *)_ltc_mempool_u32;
-	return (mpa_scratch_mem)pool;
-}
 
-/* release unused pageable_zi vmem */
-static void release_unused_mpa_scratch_memory(void)
-{
-	mpa_scratch_mem pool = (void *)_ltc_mempool_u32;
-	struct mpa_scratch_item *item;
-	vaddr_t start;
-	vaddr_t end;
-
-	/* we never free the header */
-	if (pool->last_offset) {
-		item = (struct mpa_scratch_item *)
-				((vaddr_t)pool + pool->last_offset);
-		start = (vaddr_t)item + item->size;
-	} else {
-		start = (vaddr_t)pool + sizeof(struct mpa_scratch_mem_struct);
-	}
-	end = (vaddr_t)pool + pool->size;
-	start = ROUNDUP(start, SMALL_PAGE_SIZE);
-	end = ROUNDDOWN(end, SMALL_PAGE_SIZE);
-
-	if (start < end)
-		tee_pager_release_phys((void *)start, end - start);
+	return mempool_alloc_pool(data, size, tee_pager_release_phys);
 }
 #else /* CFG_WITH_PAGER */
-
-static uint32_t _ltc_mempool_u32[LTC_MEMPOOL_U32_SIZE]
-	__aligned(__alignof__(mpa_scratch_mem_base));
-
-static mpa_scratch_mem get_mpa_scratch_memory_pool(size_t *size_pool)
+static struct mempool *get_mpa_scratch_memory_pool(void)
 {
-	void *pool = (void *)_ltc_mempool_u32;
+	static uint32_t data[LTC_MEMPOOL_U32_SIZE] __aligned(__alignof__(long));
 
-	*size_pool = sizeof(_ltc_mempool_u32);
-	return (mpa_scratch_mem)pool;
-}
-
-static void release_unused_mpa_scratch_memory(void)
-{
-	/* nothing to do in non-pager mode */
-}
-
-#endif
-
-static void pool_postactions(void)
-{
-	mpa_scratch_mem pool = (void *)_ltc_mempool_u32;
-
-	if (pool->last_offset)
-		panic("release issue in mpa scratch memory");
-	release_unused_mpa_scratch_memory();
-}
-
-#if defined(CFG_LTC_OPTEE_THREAD)
-#include <kernel/thread.h>
-static struct mpa_scratch_mem_sync {
-	struct mutex mu;
-	struct condvar cv;
-	size_t count;
-	int owner;
-} pool_sync = {
-	.mu = MUTEX_INITIALIZER,
-	.cv = CONDVAR_INITIALIZER,
-	.owner = THREAD_ID_INVALID,
-};
-#elif defined(LTC_PTHREAD)
-#error NOT SUPPORTED
-#else
-static struct mpa_scratch_mem_sync {
-	size_t count;
-} pool_sync;
-#endif
-
-/* Get exclusive access to scratch memory pool */
-#if defined(CFG_LTC_OPTEE_THREAD)
-static void get_pool(struct mpa_scratch_mem_sync *sync)
-{
-	mutex_lock(&sync->mu);
-
-	if (sync->owner != thread_get_id()) {
-		/* Wait until the pool is available */
-		while (sync->owner != THREAD_ID_INVALID)
-			condvar_wait(&sync->cv, &sync->mu);
-
-		sync->owner = thread_get_id();
-		assert(sync->count == 0);
-	}
-
-	sync->count++;
-
-	mutex_unlock(&sync->mu);
-}
-
-/* Put (release) exclusive access to scratch memory pool */
-static void put_pool(struct mpa_scratch_mem_sync *sync)
-{
-	mutex_lock(&sync->mu);
-
-	assert(sync->owner == thread_get_id());
-	assert(sync->count > 0);
-
-	sync->count--;
-	if (!sync->count) {
-		sync->owner = THREAD_ID_INVALID;
-		condvar_signal(&sync->cv);
-		pool_postactions();
-	}
-
-	mutex_unlock(&sync->mu);
-}
-#elif defined(LTC_PTHREAD)
-#error NOT SUPPORTED
-#else
-static void get_pool(struct mpa_scratch_mem_sync *sync)
-{
-	sync->count++;
-}
-
-/* Put (release) exclusive access to scratch memory pool */
-static void put_pool(struct mpa_scratch_mem_sync *sync)
-{
-	sync->count--;
-	if (!sync->count)
-		pool_postactions();
+	return mempool_alloc_pool(data, sizeof(data), NULL);
 }
 #endif
 
 static void tee_ltc_alloc_mpa(void)
 {
-	mpa_scratch_mem pool;
-	size_t size_pool;
+	static mpa_scratch_mem_base mem;
 
-	pool = get_mpa_scratch_memory_pool(&size_pool);
-	init_mpa_tomcrypt(pool);
-	mpa_init_scratch_mem_sync(pool, size_pool, LTC_MAX_BITS_PER_VARIABLE,
-				  get_pool, put_pool, &pool_sync);
-
-	mpa_set_random_generator(crypto_ops.prng.read);
+	/*
+	 * The default size (bits) of a big number that will be required it
+	 * equals the max size of the computation (for example 4096 bits),
+	 * multiplied by 2 to allow overflow in computation
+	 */
+	mem.bn_bits = CFG_CORE_BIGNUM_MAX_BITS * 2;
+	mem.pool = get_mpa_scratch_memory_pool();
+	if (!mem.pool)
+		panic();
+	init_mpa_tomcrypt(&mem);
 }
 
-static size_t num_bytes(struct bignum *a)
+size_t crypto_bignum_num_bytes(struct bignum *a)
 {
 	return mp_unsigned_bin_size(a);
 }
 
-static size_t num_bits(struct bignum *a)
+size_t crypto_bignum_num_bits(struct bignum *a)
 {
 	return mp_count_bits(a);
 }
 
-static int32_t compare(struct bignum *a, struct bignum *b)
+int32_t crypto_bignum_compare(struct bignum *a, struct bignum *b)
 {
 	return mp_cmp(a, b);
 }
 
-static void bn2bin(const struct bignum *from, uint8_t *to)
+void crypto_bignum_bn2bin(const struct bignum *from, uint8_t *to)
 {
 	mp_to_unsigned_bin((struct bignum *)from, to);
 }
 
-static TEE_Result bin2bn(const uint8_t *from, size_t fromsize,
+TEE_Result crypto_bignum_bin2bn(const uint8_t *from, size_t fromsize,
 			 struct bignum *to)
 {
 	if (mp_read_unsigned_bin(to, (uint8_t *)from, fromsize) != CRYPT_OK)
@@ -669,12 +497,12 @@ static TEE_Result bin2bn(const uint8_t *from, size_t fromsize,
 	return TEE_SUCCESS;
 }
 
-static void copy(struct bignum *to, const struct bignum *from)
+void crypto_bignum_copy(struct bignum *to, const struct bignum *from)
 {
 	mp_copy((void *)from, to);
 }
 
-static struct bignum *bn_allocate(size_t size_bits)
+struct bignum *crypto_bignum_allocate(size_t size_bits)
 {
 	size_t sz = mpa_StaticVarSizeInU32(size_bits) *	sizeof(uint32_t);
 	struct mpa_numbase_struct *bn = calloc(1, sz);
@@ -685,12 +513,12 @@ static struct bignum *bn_allocate(size_t size_bits)
 	return (struct bignum *)bn;
 }
 
-static void bn_free(struct bignum *s)
+void crypto_bignum_free(struct bignum *s)
 {
 	free(s);
 }
 
-static void bn_clear(struct bignum *s)
+void crypto_bignum_clear(struct bignum *s)
 {
 	struct mpa_numbase_struct *bn = (struct mpa_numbase_struct *)s;
 
@@ -700,17 +528,33 @@ static void bn_clear(struct bignum *s)
 
 static bool bn_alloc_max(struct bignum **s)
 {
-	size_t sz = mpa_StaticVarSizeInU32(LTC_MAX_BITS_PER_VARIABLE) *
+	size_t sz = mpa_StaticVarSizeInU32(CFG_CORE_BIGNUM_MAX_BITS) *
 			sizeof(uint32_t) * 8;
 
-	*s = bn_allocate(sz);
+	*s = crypto_bignum_allocate(sz);
 	return !!(*s);
+}
+
+static TEE_Result __maybe_unused convert_ltc_verify_status(int ltc_res,
+							   int ltc_stat)
+{
+	switch (ltc_res) {
+	case CRYPT_OK:
+		if (ltc_stat == 1)
+			return TEE_SUCCESS;
+		else
+			return TEE_ERROR_SIGNATURE_INVALID;
+	case CRYPT_INVALID_PACKET:
+		return TEE_ERROR_SIGNATURE_INVALID;
+	default:
+		return TEE_ERROR_GENERIC;
+	}
 }
 
 #if defined(CFG_CRYPTO_RSA)
 
-static TEE_Result alloc_rsa_keypair(struct rsa_keypair *s,
-				    size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_rsa_keypair(struct rsa_keypair *s,
+					    size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->e)) {
@@ -733,19 +577,19 @@ static TEE_Result alloc_rsa_keypair(struct rsa_keypair *s,
 
 	return TEE_SUCCESS;
 err:
-	bn_free(s->e);
-	bn_free(s->d);
-	bn_free(s->n);
-	bn_free(s->p);
-	bn_free(s->q);
-	bn_free(s->qp);
-	bn_free(s->dp);
+	crypto_bignum_free(s->e);
+	crypto_bignum_free(s->d);
+	crypto_bignum_free(s->n);
+	crypto_bignum_free(s->p);
+	crypto_bignum_free(s->q);
+	crypto_bignum_free(s->qp);
+	crypto_bignum_free(s->dp);
 
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static TEE_Result alloc_rsa_public_key(struct rsa_public_key *s,
-				       size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_rsa_public_key(struct rsa_public_key *s,
+					       size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->e)) {
@@ -755,31 +599,30 @@ static TEE_Result alloc_rsa_public_key(struct rsa_public_key *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->e);
+	crypto_bignum_free(s->e);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static void free_rsa_public_key(struct rsa_public_key *s)
+void crypto_acipher_free_rsa_public_key(struct rsa_public_key *s)
 {
 	if (!s)
 		return;
-	bn_free(s->n);
-	bn_free(s->e);
+	crypto_bignum_free(s->n);
+	crypto_bignum_free(s->e);
 }
 
-static TEE_Result gen_rsa_key(struct rsa_keypair *key, size_t key_size)
+TEE_Result crypto_acipher_gen_rsa_key(struct rsa_keypair *key, size_t key_size)
 {
 	TEE_Result res;
 	rsa_key ltc_tmp_key;
 	int ltc_res;
 	long e;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	/* get the public exponent */
 	e = mp_get_int(key->e);
 
 	/* Generate a temporary RSA key */
-	ltc_res = rsa_make_key(&prng->state, prng->index, key_size/8, e,
+	ltc_res = rsa_make_key(NULL, find_prng("prng_mpa"), key_size / 8, e,
 			       &ltc_tmp_key);
 	if (ltc_res != CRYPT_OK) {
 		res = TEE_ERROR_BAD_PARAMETERS;
@@ -805,7 +648,6 @@ static TEE_Result gen_rsa_key(struct rsa_keypair *key, size_t key_size)
 	return res;
 }
 
-
 static TEE_Result rsadorep(rsa_key *ltc_key, const uint8_t *src,
 			   size_t src_len, uint8_t *dst, size_t *dst_len)
 {
@@ -819,7 +661,7 @@ static TEE_Result rsadorep(rsa_key *ltc_key, const uint8_t *src,
 	 * required size of the out buffer without doing a partial decrypt.
 	 * We know the upper bound though.
 	 */
-	blen = (mpa_StaticTempVarSizeInU32(LTC_MAX_BITS_PER_VARIABLE)) *
+	blen = (mpa_StaticTempVarSizeInU32(CFG_CORE_BIGNUM_MAX_BITS)) *
 	       sizeof(uint32_t);
 	buf = malloc(blen);
 	if (!buf) {
@@ -868,9 +710,9 @@ out:
 	return res;
 }
 
-static TEE_Result rsanopad_encrypt(struct rsa_public_key *key,
-				   const uint8_t *src, size_t src_len,
-				   uint8_t *dst, size_t *dst_len)
+TEE_Result crypto_acipher_rsanopad_encrypt(struct rsa_public_key *key,
+					   const uint8_t *src, size_t src_len,
+					   uint8_t *dst, size_t *dst_len)
 {
 	TEE_Result res;
 	rsa_key ltc_key = { 0, };
@@ -883,9 +725,9 @@ static TEE_Result rsanopad_encrypt(struct rsa_public_key *key,
 	return res;
 }
 
-static TEE_Result rsanopad_decrypt(struct rsa_keypair *key,
-				   const uint8_t *src, size_t src_len,
-				   uint8_t *dst, size_t *dst_len)
+TEE_Result crypto_acipher_rsanopad_decrypt(struct rsa_keypair *key,
+					   const uint8_t *src, size_t src_len,
+					   uint8_t *dst, size_t *dst_len)
 {
 	TEE_Result res;
 	rsa_key ltc_key = { 0, };
@@ -894,7 +736,7 @@ static TEE_Result rsanopad_decrypt(struct rsa_keypair *key,
 	ltc_key.e = key->e;
 	ltc_key.N = key->n;
 	ltc_key.d = key->d;
-	if (key->p && num_bytes(key->p)) {
+	if (key->p && crypto_bignum_num_bytes(key->p)) {
 		ltc_key.p = key->p;
 		ltc_key.q = key->q;
 		ltc_key.qP = key->qp;
@@ -906,10 +748,10 @@ static TEE_Result rsanopad_decrypt(struct rsa_keypair *key,
 	return res;
 }
 
-static TEE_Result rsaes_decrypt(uint32_t algo, struct rsa_keypair *key,
-				    const uint8_t *label, size_t label_len,
-				    const uint8_t *src, size_t src_len,
-				    uint8_t *dst, size_t *dst_len)
+TEE_Result crypto_acipher_rsaes_decrypt(uint32_t algo, struct rsa_keypair *key,
+					const uint8_t *label, size_t label_len,
+					const uint8_t *src, size_t src_len,
+					uint8_t *dst, size_t *dst_len)
 {
 	TEE_Result res = TEE_SUCCESS;
 	void *buf = NULL;
@@ -922,7 +764,7 @@ static TEE_Result rsaes_decrypt(uint32_t algo, struct rsa_keypair *key,
 	ltc_key.e = key->e;
 	ltc_key.d = key->d;
 	ltc_key.N = key->n;
-	if (key->p && num_bytes(key->p)) {
+	if (key->p && crypto_bignum_num_bytes(key->p)) {
 		ltc_key.p = key->p;
 		ltc_key.q = key->q;
 		ltc_key.qP = key->qp;
@@ -1002,7 +844,8 @@ out:
 	return res;
 }
 
-static TEE_Result rsaes_encrypt(uint32_t algo, struct rsa_public_key *key,
+TEE_Result crypto_acipher_rsaes_encrypt(uint32_t algo,
+					struct rsa_public_key *key,
 					const uint8_t *label, size_t label_len,
 					const uint8_t *src, size_t src_len,
 					uint8_t *dst, size_t *dst_len)
@@ -1015,7 +858,6 @@ static TEE_Result rsaes_encrypt(uint32_t algo, struct rsa_public_key *key,
 		.e = key->e,
 		.N = key->n
 	};
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	mod_size =  ltc_mp.unsigned_size((void *)(ltc_key.N));
 	if (*dst_len < mod_size) {
@@ -1037,7 +879,7 @@ static TEE_Result rsaes_encrypt(uint32_t algo, struct rsa_public_key *key,
 
 	ltc_res = rsa_encrypt_key_ex(src, src_len, dst,
 				     (unsigned long *)(dst_len), label,
-				     label_len, &prng->state, prng->index,
+				     label_len, NULL, find_prng("prng_mpa"),
 				     ltc_hashindex, ltc_rsa_algo, &ltc_key);
 	switch (ltc_res) {
 	case CRYPT_PK_INVALID_PADDING:
@@ -1059,23 +901,22 @@ out:
 	return res;
 }
 
-static TEE_Result rsassa_sign(uint32_t algo, struct rsa_keypair *key,
-			      int salt_len, const uint8_t *msg,
-			      size_t msg_len, uint8_t *sig,
-			      size_t *sig_len)
+TEE_Result crypto_acipher_rsassa_sign(uint32_t algo, struct rsa_keypair *key,
+				      int salt_len, const uint8_t *msg,
+				      size_t msg_len, uint8_t *sig,
+				      size_t *sig_len)
 {
 	TEE_Result res;
 	size_t hash_size, mod_size;
 	int ltc_res, ltc_rsa_algo, ltc_hashindex;
 	unsigned long ltc_sig_len;
 	rsa_key ltc_key = { 0, };
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	ltc_key.type = PK_PRIVATE;
 	ltc_key.e = key->e;
 	ltc_key.N = key->n;
 	ltc_key.d = key->d;
-	if (key->p && num_bytes(key->p)) {
+	if (key->p && crypto_bignum_num_bytes(key->p)) {
 		ltc_key.p = key->p;
 		ltc_key.q = key->q;
 		ltc_key.qP = key->qp;
@@ -1131,7 +972,7 @@ static TEE_Result rsassa_sign(uint32_t algo, struct rsa_keypair *key,
 	ltc_sig_len = mod_size;
 
 	ltc_res = rsa_sign_hash_ex(msg, msg_len, sig, &ltc_sig_len,
-				   ltc_rsa_algo, &prng->state, prng->index,
+				   ltc_rsa_algo, NULL, find_prng("prng_mpa"),
 				   ltc_hashindex, salt_len, &ltc_key);
 
 	*sig_len = ltc_sig_len;
@@ -1146,10 +987,11 @@ err:
 	return res;
 }
 
-static TEE_Result rsassa_verify(uint32_t algo, struct rsa_public_key *key,
-				int salt_len, const uint8_t *msg,
-				size_t msg_len, const uint8_t *sig,
-				size_t sig_len)
+TEE_Result crypto_acipher_rsassa_verify(uint32_t algo,
+					struct rsa_public_key *key,
+					int salt_len, const uint8_t *msg,
+					size_t msg_len, const uint8_t *sig,
+					size_t sig_len)
 {
 	TEE_Result res;
 	uint32_t bigint_size;
@@ -1205,12 +1047,7 @@ static TEE_Result rsassa_verify(uint32_t algo, struct rsa_public_key *key,
 
 	ltc_res = rsa_verify_hash_ex(sig, sig_len, msg, msg_len, ltc_rsa_algo,
 				     ltc_hashindex, salt_len, &stat, &ltc_key);
-	if ((ltc_res != CRYPT_OK) || (stat != 1)) {
-		res = TEE_ERROR_SIGNATURE_INVALID;
-		goto err;
-	}
-	res = TEE_SUCCESS;
-
+	res = convert_ltc_verify_status(ltc_res, stat);
 err:
 	return res;
 }
@@ -1219,8 +1056,8 @@ err:
 
 #if defined(CFG_CRYPTO_DSA)
 
-static TEE_Result alloc_dsa_keypair(struct dsa_keypair *s,
-				    size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_dsa_keypair(struct dsa_keypair *s,
+					    size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->g)) {
@@ -1237,15 +1074,15 @@ static TEE_Result alloc_dsa_keypair(struct dsa_keypair *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->g);
-	bn_free(s->p);
-	bn_free(s->q);
-	bn_free(s->y);
+	crypto_bignum_free(s->g);
+	crypto_bignum_free(s->p);
+	crypto_bignum_free(s->q);
+	crypto_bignum_free(s->y);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static TEE_Result alloc_dsa_public_key(struct dsa_public_key *s,
-				       size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_dsa_public_key(struct dsa_public_key *s,
+					       size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->g)) {
@@ -1260,19 +1097,18 @@ static TEE_Result alloc_dsa_public_key(struct dsa_public_key *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->g);
-	bn_free(s->p);
-	bn_free(s->q);
+	crypto_bignum_free(s->g);
+	crypto_bignum_free(s->p);
+	crypto_bignum_free(s->q);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static TEE_Result gen_dsa_key(struct dsa_keypair *key, size_t key_size)
+TEE_Result crypto_acipher_gen_dsa_key(struct dsa_keypair *key, size_t key_size)
 {
 	TEE_Result res;
 	dsa_key ltc_tmp_key;
 	size_t group_size, modulus_size = key_size/8;
 	int ltc_res;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	if (modulus_size <= 128)
 		group_size = 20;
@@ -1284,7 +1120,7 @@ static TEE_Result gen_dsa_key(struct dsa_keypair *key, size_t key_size)
 		group_size = 40;
 
 	/* Generate the DSA key */
-	ltc_res = dsa_make_key(&prng->state, prng->index, group_size,
+	ltc_res = dsa_make_key(NULL, find_prng("prng_mpa"), group_size,
 			       modulus_size, &ltc_tmp_key);
 	if (ltc_res != CRYPT_OK) {
 		res = TEE_ERROR_BAD_PARAMETERS;
@@ -1306,9 +1142,9 @@ static TEE_Result gen_dsa_key(struct dsa_keypair *key, size_t key_size)
 	return res;
 }
 
-static TEE_Result dsa_sign(uint32_t algo, struct dsa_keypair *key,
-			   const uint8_t *msg, size_t msg_len, uint8_t *sig,
-			   size_t *sig_len)
+TEE_Result crypto_acipher_dsa_sign(uint32_t algo, struct dsa_keypair *key,
+				   const uint8_t *msg, size_t msg_len,
+				   uint8_t *sig, size_t *sig_len)
 {
 	TEE_Result res;
 	size_t hash_size;
@@ -1323,7 +1159,6 @@ static TEE_Result dsa_sign(uint32_t algo, struct dsa_keypair *key,
 		.y = key->y,
 		.x = key->x,
 	};
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	if (algo != TEE_ALG_DSA_SHA1 &&
 	    algo != TEE_ALG_DSA_SHA224 &&
@@ -1355,8 +1190,8 @@ static TEE_Result dsa_sign(uint32_t algo, struct dsa_keypair *key,
 		goto err;
 	}
 
-	ltc_res = dsa_sign_hash_raw(msg, msg_len, r, s, &prng->state,
-				    prng->index, &ltc_key);
+	ltc_res = dsa_sign_hash_raw(msg, msg_len, r, s, NULL,
+				    find_prng("prng_mpa"), &ltc_key);
 
 	if (ltc_res == CRYPT_OK) {
 		*sig_len = 2 * mp_unsigned_bin_size(ltc_key.q);
@@ -1376,9 +1211,9 @@ err:
 	return res;
 }
 
-static TEE_Result dsa_verify(uint32_t algo, struct dsa_public_key *key,
-			     const uint8_t *msg, size_t msg_len,
-			     const uint8_t *sig, size_t sig_len)
+TEE_Result crypto_acipher_dsa_verify(uint32_t algo, struct dsa_public_key *key,
+				     const uint8_t *msg, size_t msg_len,
+				     const uint8_t *sig, size_t sig_len)
 {
 	TEE_Result res;
 	int ltc_stat, ltc_res;
@@ -1408,12 +1243,7 @@ static TEE_Result dsa_verify(uint32_t algo, struct dsa_public_key *key,
 	mp_read_unsigned_bin(s, (uint8_t *)sig + sig_len/2, sig_len/2);
 	ltc_res = dsa_verify_hash_raw(r, s, msg, msg_len, &ltc_stat, &ltc_key);
 	mp_clear_multi(r, s, NULL);
-
-	if ((ltc_res == CRYPT_OK) && (ltc_stat == 1))
-		res = TEE_SUCCESS;
-	else
-		res = TEE_ERROR_GENERIC;
-
+	res = convert_ltc_verify_status(ltc_res, ltc_stat);
 err:
 	return res;
 }
@@ -1422,8 +1252,8 @@ err:
 
 #if defined(CFG_CRYPTO_DH)
 
-static TEE_Result alloc_dh_keypair(struct dh_keypair *s,
-				   size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_dh_keypair(struct dh_keypair *s,
+					   size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->g)) {
@@ -1440,25 +1270,24 @@ static TEE_Result alloc_dh_keypair(struct dh_keypair *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->g);
-	bn_free(s->p);
-	bn_free(s->y);
-	bn_free(s->x);
+	crypto_bignum_free(s->g);
+	crypto_bignum_free(s->p);
+	crypto_bignum_free(s->y);
+	crypto_bignum_free(s->x);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static TEE_Result gen_dh_key(struct dh_keypair *key, struct bignum *q,
-			     size_t xbits)
+TEE_Result crypto_acipher_gen_dh_key(struct dh_keypair *key, struct bignum *q,
+				     size_t xbits)
 {
 	TEE_Result res;
 	dh_key ltc_tmp_key;
 	int ltc_res;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	/* Generate the DH key */
 	ltc_tmp_key.g = key->g;
 	ltc_tmp_key.p = key->p;
-	ltc_res = dh_make_key(&prng->state, prng->index, q, xbits,
+	ltc_res = dh_make_key(NULL, find_prng("prng_mpa"), q, xbits,
 			      &ltc_tmp_key);
 	if (ltc_res != CRYPT_OK) {
 		res = TEE_ERROR_BAD_PARAMETERS;
@@ -1473,9 +1302,9 @@ static TEE_Result gen_dh_key(struct dh_keypair *key, struct bignum *q,
 	return res;
 }
 
-static TEE_Result do_dh_shared_secret(struct dh_keypair *private_key,
-				      struct bignum *public_key,
-				      struct bignum *secret)
+TEE_Result crypto_acipher_dh_shared_secret(struct dh_keypair *private_key,
+					   struct bignum *public_key,
+					   struct bignum *secret)
 {
 	int err;
 	dh_key pk = {
@@ -1494,8 +1323,8 @@ static TEE_Result do_dh_shared_secret(struct dh_keypair *private_key,
 
 #if defined(CFG_CRYPTO_ECC)
 
-static TEE_Result alloc_ecc_keypair(struct ecc_keypair *s,
-				   size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_ecc_keypair(struct ecc_keypair *s,
+					    size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->d))
@@ -1506,14 +1335,14 @@ static TEE_Result alloc_ecc_keypair(struct ecc_keypair *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->d);
-	bn_free(s->x);
-	bn_free(s->y);
+	crypto_bignum_free(s->d);
+	crypto_bignum_free(s->x);
+	crypto_bignum_free(s->y);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static TEE_Result alloc_ecc_public_key(struct ecc_public_key *s,
-				   size_t key_size_bits __unused)
+TEE_Result crypto_acipher_alloc_ecc_public_key(struct ecc_public_key *s,
+					       size_t key_size_bits __unused)
 {
 	memset(s, 0, sizeof(*s));
 	if (!bn_alloc_max(&s->x))
@@ -1522,18 +1351,18 @@ static TEE_Result alloc_ecc_public_key(struct ecc_public_key *s,
 		goto err;
 	return TEE_SUCCESS;
 err:
-	bn_free(s->x);
-	bn_free(s->y);
+	crypto_bignum_free(s->x);
+	crypto_bignum_free(s->y);
 	return TEE_ERROR_OUT_OF_MEMORY;
 }
 
-static void free_ecc_public_key(struct ecc_public_key *s)
+void crypto_acipher_free_ecc_public_key(struct ecc_public_key *s)
 {
 	if (!s)
 		return;
 
-	bn_free(s->x);
-	bn_free(s->y);
+	crypto_bignum_free(s->x);
+	crypto_bignum_free(s->y);
 }
 
 /*
@@ -1606,12 +1435,11 @@ static TEE_Result ecc_get_keysize(uint32_t curve, uint32_t algo,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result gen_ecc_key(struct ecc_keypair *key)
+TEE_Result crypto_acipher_gen_ecc_key(struct ecc_keypair *key)
 {
 	TEE_Result res;
 	ecc_key ltc_tmp_key;
 	int ltc_res;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 	size_t key_size_bytes = 0;
 	size_t key_size_bits = 0;
 
@@ -1621,7 +1449,7 @@ static TEE_Result gen_ecc_key(struct ecc_keypair *key)
 	}
 
 	/* Generate the ECC key */
-	ltc_res = ecc_make_key(&prng->state, prng->index,
+	ltc_res = ecc_make_key(NULL, find_prng("prng_mpa"),
 			       key_size_bytes, &ltc_tmp_key);
 	if (ltc_res != CRYPT_OK) {
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -1728,16 +1556,15 @@ static TEE_Result ecc_populate_ltc_public_key(ecc_key *ltc_key,
 	return ecc_compute_key_idx(ltc_key, *key_size_bytes);
 }
 
-static TEE_Result ecc_sign(uint32_t algo, struct ecc_keypair *key,
-			   const uint8_t *msg, size_t msg_len, uint8_t *sig,
-			   size_t *sig_len)
+TEE_Result crypto_acipher_ecc_sign(uint32_t algo, struct ecc_keypair *key,
+				   const uint8_t *msg, size_t msg_len,
+				   uint8_t *sig, size_t *sig_len)
 {
 	TEE_Result res;
 	int ltc_res;
 	void *r, *s;
 	size_t key_size_bytes;
 	ecc_key ltc_key;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
 
 	if (algo == 0) {
 		res = TEE_ERROR_BAD_PARAMETERS;
@@ -1762,7 +1589,7 @@ static TEE_Result ecc_sign(uint32_t algo, struct ecc_keypair *key,
 	}
 
 	ltc_res = ecc_sign_hash_raw(msg, msg_len, r, s,
-				    &prng->state, prng->index, &ltc_key);
+				    NULL, find_prng("prng_mpa"), &ltc_key);
 
 	if (ltc_res == CRYPT_OK) {
 		*sig_len = 2 * key_size_bytes;
@@ -1782,9 +1609,9 @@ err:
 	return res;
 }
 
-static TEE_Result ecc_verify(uint32_t algo, struct ecc_public_key *key,
-			     const uint8_t *msg, size_t msg_len,
-			     const uint8_t *sig, size_t sig_len)
+TEE_Result crypto_acipher_ecc_verify(uint32_t algo, struct ecc_public_key *key,
+				     const uint8_t *msg, size_t msg_len,
+				     const uint8_t *sig, size_t sig_len)
 {
 	TEE_Result res;
 	int ltc_stat;
@@ -1819,19 +1646,16 @@ static TEE_Result ecc_verify(uint32_t algo, struct ecc_public_key *key,
 	mp_read_unsigned_bin(s, (uint8_t *)sig + sig_len/2, sig_len/2);
 
 	ltc_res = ecc_verify_hash_raw(r, s, msg, msg_len, &ltc_stat, &ltc_key);
-	if ((ltc_res == CRYPT_OK) && (ltc_stat == 1))
-		res = TEE_SUCCESS;
-	else
-		res = TEE_ERROR_GENERIC;
-
+	res = convert_ltc_verify_status(ltc_res, ltc_stat);
 out:
 	mp_clear_multi(key_z, r, s, NULL);
 	return res;
 }
 
-static TEE_Result do_ecc_shared_secret(struct ecc_keypair *private_key,
-				       struct ecc_public_key *public_key,
-				       void *secret, unsigned long *secret_len)
+TEE_Result crypto_acipher_ecc_shared_secret(struct ecc_keypair *private_key,
+					    struct ecc_public_key *public_key,
+					    void *secret,
+					    unsigned long *secret_len)
 {
 	TEE_Result res;
 	int ltc_res;
@@ -1911,19 +1735,6 @@ struct tee_symmetric_xts {
 };
 #endif
 
-static TEE_Result cipher_get_block_size(uint32_t algo, size_t *size)
-{
-	TEE_Result res;
-	int ltc_cipherindex;
-
-	res = tee_algo_to_ltc_cipherindex(algo, &ltc_cipherindex);
-	if (res != TEE_SUCCESS)
-		return TEE_ERROR_NOT_SUPPORTED;
-
-	*size = cipher_descriptor[ltc_cipherindex]->block_length;
-	return TEE_SUCCESS;
-}
-
 static TEE_Result cipher_get_ctx_size(uint32_t algo, size_t *size)
 {
 	switch (algo) {
@@ -1979,6 +1790,47 @@ static TEE_Result cipher_get_ctx_size(uint32_t algo, size_t *size)
 	return TEE_SUCCESS;
 }
 
+TEE_Result crypto_cipher_alloc_ctx(void **ctx_ret, uint32_t algo)
+{
+	TEE_Result res;
+	size_t ctx_size;
+	void *ctx;
+
+	res = cipher_get_ctx_size(algo, &ctx_size);
+	if (res)
+		return res;
+
+	ctx = calloc(1, ctx_size);
+	if (!ctx)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*ctx_ret = ctx;
+	return TEE_SUCCESS;
+}
+
+void crypto_cipher_free_ctx(void *ctx, uint32_t algo __maybe_unused)
+{
+	size_t ctx_size __maybe_unused;
+
+	/*
+	 * Check that it's a supported algo, or crypto_cipher_alloc_ctx()
+	 * could never have succeded above.
+	 */
+	if (ctx)
+		assert(!cipher_get_ctx_size(algo, &ctx_size));
+	free(ctx);
+}
+
+void crypto_cipher_copy_state(void *dst_ctx, void *src_ctx, uint32_t algo)
+{
+	TEE_Result res __maybe_unused;
+	size_t ctx_size = 0;
+
+	res = cipher_get_ctx_size(algo, &ctx_size);
+	assert(!res);
+	memcpy(dst_ctx, src_ctx, ctx_size);
+}
+
 static void get_des2_key(const uint8_t *key, size_t key_len,
 			 uint8_t *key_intermediate,
 			 uint8_t **real_key, size_t *real_key_len)
@@ -2001,7 +1853,7 @@ static void get_des2_key(const uint8_t *key, size_t key_len,
 	}
 }
 
-static TEE_Result cipher_init(void *ctx, uint32_t algo,
+TEE_Result crypto_cipher_init(void *ctx, uint32_t algo,
 			      TEE_OperationMode mode __maybe_unused,
 			      const uint8_t *key1, size_t key1_len,
 			      const uint8_t *key2 __maybe_unused,
@@ -2078,16 +1930,14 @@ static TEE_Result cipher_init(void *ctx, uint32_t algo,
 #if defined(CFG_CRYPTO_CTS)
 	case TEE_ALG_AES_CTS:
 		cts = ctx;
-		res = cipher_init((void *)(&(cts->ecb)),
-					  TEE_ALG_AES_ECB_NOPAD, mode, key1,
-					  key1_len, key2, key2_len, iv,
-					  iv_len);
+		res = crypto_cipher_init((void *)(&(cts->ecb)),
+					 TEE_ALG_AES_ECB_NOPAD, mode, key1,
+					 key1_len, key2, key2_len, iv, iv_len);
 		if (res != TEE_SUCCESS)
 			return res;
-		res = cipher_init((void *)(&(cts->cbc)),
-					  TEE_ALG_AES_CBC_NOPAD, mode, key1,
-					  key1_len, key2, key2_len, iv,
-					  iv_len);
+		res = crypto_cipher_init((void *)(&(cts->cbc)),
+					 TEE_ALG_AES_CBC_NOPAD, mode, key1,
+					 key1_len, key2, key2_len, iv, iv_len);
 		if (res != TEE_SUCCESS)
 			return res;
 		ltc_res = CRYPT_OK;
@@ -2120,7 +1970,7 @@ static TEE_Result cipher_init(void *ctx, uint32_t algo,
 		return TEE_ERROR_BAD_STATE;
 }
 
-static TEE_Result cipher_update(void *ctx, uint32_t algo,
+TEE_Result crypto_cipher_update(void *ctx, uint32_t algo,
 				TEE_OperationMode mode,
 				bool last_block __maybe_unused,
 				const uint8_t *data, size_t len, uint8_t *dst)
@@ -2189,7 +2039,7 @@ static TEE_Result cipher_update(void *ctx, uint32_t algo,
 		return TEE_ERROR_BAD_STATE;
 }
 
-static void cipher_final(void *ctx, uint32_t algo)
+void crypto_cipher_final(void *ctx, uint32_t algo)
 {
 	switch (algo) {
 #if defined(CFG_CRYPTO_ECB)
@@ -2293,7 +2143,48 @@ static TEE_Result mac_get_ctx_size(uint32_t algo, size_t *size)
 	return TEE_SUCCESS;
 }
 
-static TEE_Result mac_init(void *ctx, uint32_t algo, const uint8_t *key,
+TEE_Result crypto_mac_alloc_ctx(void **ctx_ret, uint32_t algo)
+{
+	TEE_Result res;
+	size_t ctx_size;
+	void *ctx;
+
+	res = mac_get_ctx_size(algo, &ctx_size);
+	if (res)
+		return res;
+
+	ctx = calloc(1, ctx_size);
+	if (!ctx)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*ctx_ret = ctx;
+	return TEE_SUCCESS;
+}
+
+void crypto_mac_free_ctx(void *ctx, uint32_t algo __maybe_unused)
+{
+	size_t ctx_size __maybe_unused;
+
+	/*
+	 * Check that it's a supported algo, or crypto_mac_alloc_ctx()
+	 * could never have succeded above.
+	 */
+	if (ctx)
+		assert(!mac_get_ctx_size(algo, &ctx_size));
+	free(ctx);
+}
+
+void crypto_mac_copy_state(void *dst_ctx, void *src_ctx, uint32_t algo)
+{
+	TEE_Result res __maybe_unused;
+	size_t ctx_size = 0;
+
+	res = mac_get_ctx_size(algo, &ctx_size);
+	assert(!res);
+	memcpy(dst_ctx, src_ctx, ctx_size);
+}
+
+TEE_Result crypto_mac_init(void *ctx, uint32_t algo, const uint8_t *key,
 			   size_t len)
 {
 	TEE_Result res;
@@ -2377,7 +2268,7 @@ static TEE_Result mac_init(void *ctx, uint32_t algo, const uint8_t *key,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result mac_update(void *ctx, uint32_t algo, const uint8_t *data,
+TEE_Result crypto_mac_update(void *ctx, uint32_t algo, const uint8_t *data,
 			     size_t len)
 {
 #if defined(CFG_CRYPTO_CBC_MAC)
@@ -2452,7 +2343,7 @@ static TEE_Result mac_update(void *ctx, uint32_t algo, const uint8_t *data,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result mac_final(void *ctx, uint32_t algo, uint8_t *digest,
+TEE_Result crypto_mac_final(void *ctx, uint32_t algo, uint8_t *digest,
 			    size_t digest_len)
 {
 #if defined(CFG_CRYPTO_CBC_MAC)
@@ -2497,8 +2388,9 @@ static TEE_Result mac_final(void *ctx, uint32_t algo, uint8_t *digest,
 			memset(cbc->block+cbc->current_block_len,
 			       pad_len, pad_len);
 			cbc->current_block_len = 0;
-			if (TEE_SUCCESS != mac_update(
-				ctx, algo, cbc->block, cbc->block_len))
+			if (TEE_SUCCESS != crypto_mac_update(ctx, algo,
+							     cbc->block,
+							     cbc->block_len))
 					return TEE_ERROR_BAD_STATE;
 			break;
 		default:
@@ -2511,7 +2403,7 @@ static TEE_Result mac_final(void *ctx, uint32_t algo, uint8_t *digest,
 
 		memcpy(digest, cbc->digest, MIN(ltc_digest_len,
 						cbc->block_len));
-		cipher_final(&cbc->cbc, algo);
+		crypto_cipher_final(&cbc->cbc, algo);
 		break;
 #endif
 #if defined(CFG_CRYPTO_CMAC)
@@ -2533,343 +2425,175 @@ static TEE_Result mac_final(void *ctx, uint32_t algo, uint8_t *digest,
  * Authenticated encryption
  ******************************************************************************/
 
-#if defined(_CFG_CRYPTO_WITH_AUTHENC)
-
 #define TEE_CCM_KEY_MAX_LENGTH		32
 #define TEE_CCM_NONCE_MAX_LENGTH	13
 #define TEE_CCM_TAG_MAX_LENGTH		16
 #define TEE_GCM_TAG_MAX_LENGTH		16
-#define TEE_xCM_TAG_MAX_LENGTH		16
 
 #if defined(CFG_CRYPTO_CCM)
 struct tee_ccm_state {
 	ccm_state ctx;			/* the ccm state as defined by LTC */
 	size_t tag_len;			/* tag length */
 };
-#endif
 
-#if defined(CFG_CRYPTO_GCM)
-struct tee_gcm_state {
-	gcm_state ctx;			/* the gcm state as defined by LTC */
-	size_t tag_len;			/* tag length */
-};
-#endif
-
-static TEE_Result authenc_get_ctx_size(uint32_t algo, size_t *size)
+TEE_Result crypto_aes_ccm_alloc_ctx(void **ctx_ret)
 {
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		*size = sizeof(struct tee_ccm_state);
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		*size = sizeof(struct tee_gcm_state);
-		break;
-#endif
-	default:
-		return TEE_ERROR_NOT_SUPPORTED;
-	}
+	struct tee_ccm_state *ctx = calloc(1, sizeof(*ctx));
+
+	if (!ctx)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*ctx_ret = ctx;
 	return TEE_SUCCESS;
 }
 
-static TEE_Result authenc_init(void *ctx, uint32_t algo,
-			       TEE_OperationMode mode __unused,
+void crypto_aes_ccm_free_ctx(void *ctx)
+{
+	free(ctx);
+}
+
+void crypto_aes_ccm_copy_state(void *dst_ctx, void *src_ctx)
+{
+	memcpy(dst_ctx, src_ctx, sizeof(struct tee_ccm_state));
+}
+
+TEE_Result crypto_aes_ccm_init(void *ctx, TEE_OperationMode mode __unused,
 			       const uint8_t *key, size_t key_len,
 			       const uint8_t *nonce, size_t nonce_len,
-			       size_t tag_len, size_t aad_len __maybe_unused,
-			       size_t payload_len __maybe_unused)
+			       size_t tag_len, size_t aad_len,
+			       size_t payload_len)
 {
 	TEE_Result res;
 	int ltc_res;
 	int ltc_cipherindex;
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
+	struct tee_ccm_state *ccm = ctx;
 
-	res = tee_algo_to_ltc_cipherindex(algo, &ltc_cipherindex);
+	res = tee_algo_to_ltc_cipherindex(TEE_ALG_AES_CCM, &ltc_cipherindex);
 	if (res != TEE_SUCCESS)
 		return TEE_ERROR_NOT_SUPPORTED;
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		/* reset the state */
-		ccm = ctx;
-		memset(ccm, 0, sizeof(struct tee_ccm_state));
-		ccm->tag_len = tag_len;
 
-		/* Check the key length */
-		if ((!key) || (key_len > TEE_CCM_KEY_MAX_LENGTH))
-			return TEE_ERROR_BAD_PARAMETERS;
+	/* reset the state */
+	memset(ccm, 0, sizeof(struct tee_ccm_state));
+	ccm->tag_len = tag_len;
 
-		/* check the nonce */
-		if (nonce_len > TEE_CCM_NONCE_MAX_LENGTH)
-			return TEE_ERROR_BAD_PARAMETERS;
+	/* Check the key length */
+	if ((!key) || (key_len > TEE_CCM_KEY_MAX_LENGTH))
+		return TEE_ERROR_BAD_PARAMETERS;
 
-		/* check the tag len */
-		if ((tag_len < 4) ||
-		    (tag_len > TEE_CCM_TAG_MAX_LENGTH) ||
-		    (tag_len % 2 != 0))
-			return TEE_ERROR_NOT_SUPPORTED;
+	/* check the nonce */
+	if (nonce_len > TEE_CCM_NONCE_MAX_LENGTH)
+		return TEE_ERROR_BAD_PARAMETERS;
 
-		ltc_res = ccm_init(&ccm->ctx, ltc_cipherindex, key, key_len,
-				   payload_len, tag_len, aad_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-
-		/* Add the IV */
-		ltc_res = ccm_add_nonce(&ccm->ctx, nonce, nonce_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		/* reset the state */
-		gcm = ctx;
-		memset(gcm, 0, sizeof(struct tee_gcm_state));
-		gcm->tag_len = tag_len;
-
-		ltc_res = gcm_init(&gcm->ctx, ltc_cipherindex, key, key_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-
-		/* Add the IV */
-		ltc_res = gcm_add_iv(&gcm->ctx, nonce, nonce_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-	default:
+	/* check the tag len */
+	if ((tag_len < 4) || (tag_len > TEE_CCM_TAG_MAX_LENGTH) ||
+	    (tag_len % 2 != 0))
 		return TEE_ERROR_NOT_SUPPORTED;
-	}
+
+	ltc_res = ccm_init(&ccm->ctx, ltc_cipherindex, key, key_len,
+			   payload_len, tag_len, aad_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	/* Add the IV */
+	ltc_res = ccm_add_nonce(&ccm->ctx, nonce, nonce_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-static TEE_Result authenc_update_aad(void *ctx, uint32_t algo,
-				     TEE_OperationMode mode __unused,
-				     const uint8_t *data, size_t len)
+TEE_Result crypto_aes_ccm_update_aad(void *ctx, const uint8_t *data, size_t len)
 {
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
+	struct tee_ccm_state *ccm = ctx;
 	int ltc_res;
 
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		/* Add the AAD (note: aad can be NULL if aadlen == 0) */
-		ccm = ctx;
-		ltc_res = ccm_add_aad(&ccm->ctx, data, len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		/* Add the AAD (note: aad can be NULL if aadlen == 0) */
-		gcm = ctx;
-		ltc_res = gcm_add_aad(&gcm->ctx, data, len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-	default:
-		return TEE_ERROR_NOT_SUPPORTED;
-	}
+	/* Add the AAD (note: aad can be NULL if aadlen == 0) */
+	ltc_res = ccm_add_aad(&ccm->ctx, data, len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-static TEE_Result authenc_update_payload(void *ctx, uint32_t algo,
-					 TEE_OperationMode mode,
+TEE_Result crypto_aes_ccm_update_payload(void *ctx, TEE_OperationMode mode,
 					 const uint8_t *src_data,
-					 size_t src_len,
-					 uint8_t *dst_data,
-					 size_t *dst_len)
+					 size_t len, uint8_t *dst_data)
 {
-#if defined(CFG_CRYPTO_GCM)
-	TEE_Result res;
-#endif
 	int ltc_res, dir;
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
+	struct tee_ccm_state *ccm = ctx;
 	unsigned char *pt, *ct;	/* the plain and the cipher text */
 
 	if (mode == TEE_MODE_ENCRYPT) {
 		pt = (unsigned char *)src_data;
 		ct = dst_data;
+		dir = CCM_ENCRYPT;
 	} else {
 		pt = dst_data;
 		ct = (unsigned char *)src_data;
+		dir = CCM_DECRYPT;
 	}
-
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		ccm = ctx;
-		dir = (mode == TEE_MODE_ENCRYPT ? CCM_ENCRYPT : CCM_DECRYPT);
-		ltc_res = ccm_process(&ccm->ctx, pt, src_len, ct, dir);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		*dst_len = src_len;
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		/* aad is optional ==> add one without length */
-		gcm = ctx;
-		if (gcm->ctx.mode == LTC_GCM_MODE_IV) {
-			res = authenc_update_aad(gcm, algo, mode, 0, 0);
-			if (res != TEE_SUCCESS)
-				return res;
-		}
-
-		/* process the data */
-		dir = (mode == TEE_MODE_ENCRYPT ? GCM_ENCRYPT : GCM_DECRYPT);
-		ltc_res = gcm_process(&gcm->ctx, pt, src_len, ct, dir);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		*dst_len = src_len;
-		break;
-#endif
-	default:
-		return TEE_ERROR_NOT_SUPPORTED;
-	}
+	ltc_res = ccm_process(&ccm->ctx, pt, len, ct, dir);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-static TEE_Result authenc_enc_final(void *ctx, uint32_t algo,
-				    const uint8_t *src_data,
-				    size_t src_len, uint8_t *dst_data,
-				    size_t *dst_len, uint8_t *dst_tag,
-				    size_t *dst_tag_len)
+TEE_Result crypto_aes_ccm_enc_final(void *ctx, const uint8_t *src_data,
+				    size_t len, uint8_t *dst_data,
+				    uint8_t *dst_tag, size_t *dst_tag_len)
 {
 	TEE_Result res;
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
-	size_t digest_size;
+	struct tee_ccm_state *ccm = ctx;
 	int ltc_res;
 
-	/* Check the resulting buffer is not too short */
-	res = cipher_get_block_size(algo, &digest_size);
-	if (res != TEE_SUCCESS)
-		return res;
-
 	/* Finalize the remaining buffer */
-	res = authenc_update_payload(ctx, algo, TEE_MODE_ENCRYPT, src_data,
-				     src_len, dst_data, dst_len);
+	res = crypto_aes_ccm_update_payload(ctx, TEE_MODE_ENCRYPT, src_data,
+					    len, dst_data);
 	if (res != TEE_SUCCESS)
 		return res;
 
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		/* Check the tag length */
-		ccm = ctx;
-		if (*dst_tag_len < ccm->tag_len) {
-			*dst_tag_len = ccm->tag_len;
-			return TEE_ERROR_SHORT_BUFFER;
-		}
+	/* Check the tag length */
+	if (*dst_tag_len < ccm->tag_len) {
 		*dst_tag_len = ccm->tag_len;
-
-		/* Compute the tag */
-		ltc_res = ccm_done(&ccm->ctx, dst_tag,
-				   (unsigned long *)dst_tag_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		/* Check the tag length */
-		gcm = ctx;
-		if (*dst_tag_len < gcm->tag_len) {
-			*dst_tag_len = gcm->tag_len;
-			return TEE_ERROR_SHORT_BUFFER;
-		}
-		*dst_tag_len = gcm->tag_len;
-
-		/* Compute the tag */
-		ltc_res = gcm_done(&gcm->ctx, dst_tag,
-				   (unsigned long *)dst_tag_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-	default:
-		return TEE_ERROR_NOT_SUPPORTED;
+		return TEE_ERROR_SHORT_BUFFER;
 	}
+	*dst_tag_len = ccm->tag_len;
+
+	/* Compute the tag */
+	ltc_res = ccm_done(&ccm->ctx, dst_tag,
+			   (unsigned long *)dst_tag_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-static TEE_Result authenc_dec_final(void *ctx, uint32_t algo,
-				    const uint8_t *src_data, size_t src_len,
-				    uint8_t *dst_data, size_t *dst_len,
+TEE_Result crypto_aes_ccm_dec_final(void *ctx, const uint8_t *src_data,
+				    size_t len, uint8_t *dst_data,
 				    const uint8_t *tag, size_t tag_len)
 {
 	TEE_Result res = TEE_ERROR_BAD_STATE;
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
+	struct tee_ccm_state *ccm = ctx;
 	int ltc_res;
-	uint8_t dst_tag[TEE_xCM_TAG_MAX_LENGTH];
+	uint8_t dst_tag[TEE_CCM_TAG_MAX_LENGTH];
 	unsigned long ltc_tag_len = tag_len;
 
 	if (tag_len == 0)
 		return TEE_ERROR_SHORT_BUFFER;
-	if (tag_len > TEE_xCM_TAG_MAX_LENGTH)
+	if (tag_len > TEE_CCM_TAG_MAX_LENGTH)
 		return TEE_ERROR_BAD_STATE;
 
 	/* Process the last buffer, if any */
-	res = authenc_update_payload(ctx, algo, TEE_MODE_DECRYPT, src_data,
-				     src_len, dst_data, dst_len);
+	res = crypto_aes_ccm_update_payload(ctx, TEE_MODE_DECRYPT, src_data,
+					    len, dst_data);
 	if (res != TEE_SUCCESS)
 		return res;
 
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		/* Finalize the authentication */
-		ccm = ctx;
-		ltc_res = ccm_done(&ccm->ctx, dst_tag, &ltc_tag_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		/* Finalize the authentication */
-		gcm = ctx;
-		ltc_res = gcm_done(&gcm->ctx, dst_tag, &ltc_tag_len);
-		if (ltc_res != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		break;
-#endif
-	default:
-		return TEE_ERROR_NOT_SUPPORTED;
-	}
+	/* Finalize the authentication */
+	ltc_res = ccm_done(&ccm->ctx, dst_tag, &ltc_tag_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
 
 	if (buf_compare_ct(dst_tag, tag, tag_len) != 0)
 		res = TEE_ERROR_MAC_INVALID;
@@ -2878,203 +2602,197 @@ static TEE_Result authenc_dec_final(void *ctx, uint32_t algo,
 	return res;
 }
 
-static void authenc_final(void *ctx, uint32_t algo)
+void crypto_aes_ccm_final(void *ctx)
 {
-#if defined(CFG_CRYPTO_CCM)
-	struct tee_ccm_state *ccm;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	struct tee_gcm_state *gcm;
-#endif
+	struct tee_ccm_state *ccm = ctx;
 
-	switch (algo) {
-#if defined(CFG_CRYPTO_CCM)
-	case TEE_ALG_AES_CCM:
-		ccm = ctx;
-		ccm_reset(&ccm->ctx);
-		break;
-#endif
-#if defined(CFG_CRYPTO_GCM)
-	case TEE_ALG_AES_GCM:
-		gcm = ctx;
-		gcm_reset(&gcm->ctx);
-		break;
-#endif
-	default:
-		break;
+	ccm_reset(&ccm->ctx);
+}
+#endif /*CFG_CRYPTO_CCM*/
+
+#if defined(CFG_CRYPTO_AES_GCM_FROM_CRYPTOLIB)
+struct tee_gcm_state {
+	gcm_state ctx;			/* the gcm state as defined by LTC */
+	size_t tag_len;			/* tag length */
+};
+
+TEE_Result crypto_aes_gcm_alloc_ctx(void **ctx_ret)
+{
+	struct tee_gcm_state *ctx = calloc(1, sizeof(*ctx));
+
+	if (!ctx)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*ctx_ret = ctx;
+	return TEE_SUCCESS;
+}
+
+void crypto_aes_gcm_free_ctx(void *ctx)
+{
+	free(ctx);
+}
+
+void crypto_aes_gcm_copy_state(void *dst_ctx, void *src_ctx)
+{
+	memcpy(dst_ctx, src_ctx, sizeof(struct tee_gcm_state));
+}
+
+TEE_Result crypto_aes_gcm_init(void *ctx, TEE_OperationMode mode __unused,
+			       const uint8_t *key, size_t key_len,
+			       const uint8_t *nonce, size_t nonce_len,
+			       size_t tag_len)
+{
+	TEE_Result res;
+	int ltc_res;
+	int ltc_cipherindex;
+	struct tee_gcm_state *gcm = ctx;
+
+	res = tee_algo_to_ltc_cipherindex(TEE_ALG_AES_GCM, &ltc_cipherindex);
+	if (res != TEE_SUCCESS)
+		return TEE_ERROR_NOT_SUPPORTED;
+
+	/* reset the state */
+	memset(gcm, 0, sizeof(struct tee_gcm_state));
+	gcm->tag_len = tag_len;
+
+	ltc_res = gcm_init(&gcm->ctx, ltc_cipherindex, key, key_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	/* Add the IV */
+	ltc_res = gcm_add_iv(&gcm->ctx, nonce, nonce_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	return TEE_SUCCESS;
+}
+
+TEE_Result crypto_aes_gcm_update_aad(void *ctx, const uint8_t *data, size_t len)
+{
+	struct tee_gcm_state *gcm = ctx;
+	int ltc_res;
+
+	/* Add the AAD (note: aad can be NULL if aadlen == 0) */
+	ltc_res = gcm_add_aad(&gcm->ctx, data, len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	return TEE_SUCCESS;
+}
+
+TEE_Result crypto_aes_gcm_update_payload(void *ctx, TEE_OperationMode mode,
+					 const uint8_t *src_data,
+					 size_t len, uint8_t *dst_data)
+{
+	TEE_Result res;
+	int ltc_res, dir;
+	struct tee_gcm_state *gcm = ctx;
+	unsigned char *pt, *ct;	/* the plain and the cipher text */
+
+	if (mode == TEE_MODE_ENCRYPT) {
+		pt = (unsigned char *)src_data;
+		ct = dst_data;
+		dir = GCM_ENCRYPT;
+	} else {
+		pt = dst_data;
+		ct = (unsigned char *)src_data;
+		dir = GCM_DECRYPT;
 	}
-}
-#endif /* _CFG_CRYPTO_WITH_AUTHENC */
 
-/******************************************************************************
- * Pseudo Random Number Generator
- ******************************************************************************/
-static TEE_Result prng_read(void *buf, size_t blen)
-{
-	int err;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
+	/* aad is optional ==> add one without length */
+	if (gcm->ctx.mode == LTC_GCM_MODE_IV) {
+		res = crypto_aes_gcm_update_aad(gcm, NULL, 0);
+		if (res != TEE_SUCCESS)
+			return res;
+	}
 
-	err = prng_is_valid(prng->index);
-
-	if (err != CRYPT_OK)
-		return TEE_ERROR_BAD_STATE;
-
-	if (prng_descriptor[prng->index]->read(buf, blen, &prng->state) !=
-			(unsigned long)blen)
+	/* process the data */
+	ltc_res = gcm_process(&gcm->ctx, pt, len, ct, dir);
+	if (ltc_res != CRYPT_OK)
 		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-/* Called as a result of rng_generate() below */
-static TEE_Result _tee_ltc_prng_add_entropy(
-	const uint8_t *inbuf __maybe_unused, size_t len __maybe_unused)
+TEE_Result crypto_aes_gcm_enc_final(void *ctx, const uint8_t *src_data,
+				    size_t len, uint8_t *dst_data,
+				    uint8_t *dst_tag, size_t *dst_tag_len)
 {
-#if defined(CFG_WITH_SOFTWARE_PRNG)
-	int err;
-#ifdef _CFG_CRYPTO_WITH_FORTUNA_PRNG
-        int (*add_entropy)(const unsigned char *, unsigned long,
-                           prng_state *) = fortuna_add_entropy;
-#else
-        int (*add_entropy)(const unsigned char *, unsigned long,
-                           prng_state *) = rc4_add_entropy;
-#endif
+	TEE_Result res;
+	struct tee_gcm_state *gcm = ctx;
+	int ltc_res;
 
-	err = add_entropy(inbuf, len, &_tee_ltc_prng.state);
-	if (err != CRYPT_OK)
-		return TEE_ERROR_BAD_STATE;
+	/* Finalize the remaining buffer */
+	res = crypto_aes_gcm_update_payload(ctx, TEE_MODE_ENCRYPT, src_data,
+					    len, dst_data);
+	if (res != TEE_SUCCESS)
+		return res;
 
-	return TEE_SUCCESS;
-#else
-	return TEE_ERROR_BAD_STATE;
-#endif
-}
+	/* Check the tag length */
+	if (*dst_tag_len < gcm->tag_len) {
+		*dst_tag_len = gcm->tag_len;
+		return TEE_ERROR_SHORT_BUFFER;
+	}
+	*dst_tag_len = gcm->tag_len;
 
-static TEE_Result prng_add_entropy(const uint8_t *inbuf, size_t len)
-{
-	int err;
-	struct tee_ltc_prng *prng = tee_ltc_get_prng();
-
-	err = prng_is_valid(prng->index);
-
-	if (err != CRYPT_OK)
-		return _tee_ltc_prng_add_entropy(inbuf, len);
-
-	err = prng_descriptor[prng->index]->add_entropy(
-			inbuf, len, &prng->state);
-
-	if (err != CRYPT_OK)
+	/* Compute the tag */
+	ltc_res = gcm_done(&gcm->ctx, dst_tag, (unsigned long *)dst_tag_len);
+	if (ltc_res != CRYPT_OK)
 		return TEE_ERROR_BAD_STATE;
 
 	return TEE_SUCCESS;
 }
 
-static TEE_Result tee_ltc_init(void)
+TEE_Result crypto_aes_gcm_dec_final(void *ctx, const uint8_t *src_data,
+				    size_t len, uint8_t *dst_data,
+				    const uint8_t *tag, size_t tag_len)
+{
+	TEE_Result res = TEE_ERROR_BAD_STATE;
+	struct tee_gcm_state *gcm = ctx;
+	int ltc_res;
+	uint8_t dst_tag[TEE_GCM_TAG_MAX_LENGTH];
+	unsigned long ltc_tag_len = tag_len;
+
+	if (tag_len == 0)
+		return TEE_ERROR_SHORT_BUFFER;
+	if (tag_len > TEE_GCM_TAG_MAX_LENGTH)
+		return TEE_ERROR_BAD_STATE;
+
+	/* Process the last buffer, if any */
+	res = crypto_aes_gcm_update_payload(ctx, TEE_MODE_DECRYPT, src_data,
+					    len, dst_data);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	/* Finalize the authentication */
+	ltc_res = gcm_done(&gcm->ctx, dst_tag, &ltc_tag_len);
+	if (ltc_res != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	if (buf_compare_ct(dst_tag, tag, tag_len) != 0)
+		res = TEE_ERROR_MAC_INVALID;
+	else
+		res = TEE_SUCCESS;
+	return res;
+}
+
+void crypto_aes_gcm_final(void *ctx)
+{
+	struct tee_gcm_state *gcm = ctx;
+
+	gcm_reset(&gcm->ctx);
+}
+#endif /*CFG_CRYPTO_AES_GCM_FROM_CRYPTOLIB*/
+
+TEE_Result crypto_init(void)
 {
 #if defined(_CFG_CRYPTO_WITH_ACIPHER)
 	tee_ltc_alloc_mpa();
 #endif
 	tee_ltc_reg_algs();
 
-	return tee_ltc_prng_init(tee_ltc_get_prng());
+	return TEE_SUCCESS;
 }
-
-const struct crypto_ops crypto_ops = {
-	.name = "LibTomCrypt provider",
-	.init = tee_ltc_init,
-#if defined(_CFG_CRYPTO_WITH_HASH)
-	.hash = {
-		.get_ctx_size = hash_get_ctx_size,
-		.init = hash_init,
-		.update = hash_update,
-		.final = hash_final,
-	},
-#endif
-#if defined(_CFG_CRYPTO_WITH_CIPHER)
-	.cipher = {
-		.final = cipher_final,
-		.get_block_size = cipher_get_block_size,
-		.get_ctx_size = cipher_get_ctx_size,
-		.init = cipher_init,
-		.update = cipher_update,
-	},
-#endif
-#if defined(_CFG_CRYPTO_WITH_MAC)
-	.mac = {
-		.get_ctx_size = mac_get_ctx_size,
-		.init = mac_init,
-		.update = mac_update,
-		.final = mac_final,
-	},
-#endif
-#if defined(_CFG_CRYPTO_WITH_AUTHENC)
-	.authenc = {
-		.dec_final = authenc_dec_final,
-		.enc_final = authenc_enc_final,
-		.final = authenc_final,
-		.get_ctx_size = authenc_get_ctx_size,
-		.init = authenc_init,
-		.update_aad = authenc_update_aad,
-		.update_payload = authenc_update_payload,
-	},
-#endif
-#if defined(_CFG_CRYPTO_WITH_ACIPHER)
-	.acipher = {
-#if defined(CFG_CRYPTO_RSA)
-		.alloc_rsa_keypair = alloc_rsa_keypair,
-		.alloc_rsa_public_key = alloc_rsa_public_key,
-		.free_rsa_public_key = free_rsa_public_key,
-		.gen_rsa_key = gen_rsa_key,
-		.rsaes_decrypt = rsaes_decrypt,
-		.rsaes_encrypt = rsaes_encrypt,
-		.rsanopad_decrypt = rsanopad_decrypt,
-		.rsanopad_encrypt = rsanopad_encrypt,
-		.rsassa_sign = rsassa_sign,
-		.rsassa_verify = rsassa_verify,
-#endif
-#if defined(CFG_CRYPTO_DH)
-		.alloc_dh_keypair = alloc_dh_keypair,
-		.gen_dh_key = gen_dh_key,
-		.dh_shared_secret = do_dh_shared_secret,
-#endif
-#if defined(CFG_CRYPTO_DSA)
-		.alloc_dsa_keypair = alloc_dsa_keypair,
-		.alloc_dsa_public_key = alloc_dsa_public_key,
-		.gen_dsa_key = gen_dsa_key,
-		.dsa_sign = dsa_sign,
-		.dsa_verify = dsa_verify,
-#endif
-#if defined(CFG_CRYPTO_ECC)
-		/* ECDSA and ECDH */
-		.alloc_ecc_keypair = alloc_ecc_keypair,
-		.alloc_ecc_public_key = alloc_ecc_public_key,
-		.gen_ecc_key = gen_ecc_key,
-		.free_ecc_public_key = free_ecc_public_key,
-
-		/* ECDSA only */
-		.ecc_sign = ecc_sign,
-		.ecc_verify = ecc_verify,
-		/* ECDH only */
-		.ecc_shared_secret = do_ecc_shared_secret,
-#endif
-	},
-	.bignum = {
-		.allocate = bn_allocate,
-		.num_bytes = num_bytes,
-		.num_bits = num_bits,
-		.compare = compare,
-		.bn2bin = bn2bin,
-		.bin2bn = bin2bn,
-		.copy = copy,
-		.free = bn_free,
-		.clear = bn_clear
-	},
-#endif /* _CFG_CRYPTO_WITH_ACIPHER */
-	.prng = {
-		.add_entropy = prng_add_entropy,
-		.read = prng_read,
-	}
-};
 
 #if defined(CFG_WITH_VFP)
 void tomcrypt_arm_neon_enable(struct tomcrypt_arm_neon_state *state)
@@ -3107,35 +2825,26 @@ TEE_Result hash_sha256_check(const uint8_t *hash, const uint8_t *data,
 }
 #endif
 
-TEE_Result rng_generate(void *buffer, size_t len)
+TEE_Result crypto_aes_expand_enc_key(const void *key, size_t key_len,
+				     void *enc_key, unsigned int *rounds)
 {
-#if defined(CFG_WITH_SOFTWARE_PRNG)
-#ifdef _CFG_CRYPTO_WITH_FORTUNA_PRNG
-	int (*start)(prng_state *) = fortuna_start;
-	int (*ready)(prng_state *) = fortuna_ready;
-	unsigned long (*read)(unsigned char *, unsigned long, prng_state *) =
-		fortuna_read;
-#else
-	int (*start)(prng_state *) = rc4_start;
-	int (*ready)(prng_state *) = rc4_ready;
-	unsigned long (*read)(unsigned char *, unsigned long, prng_state *) =
-		rc4_read;
-#endif
+	symmetric_key skey;
 
-	if (!_tee_ltc_prng.inited) {
-		if (start(&_tee_ltc_prng.state) != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		plat_prng_add_jitter_entropy_norpc();
-		if (ready(&_tee_ltc_prng.state) != CRYPT_OK)
-			return TEE_ERROR_BAD_STATE;
-		_tee_ltc_prng.inited = true;
-	}
-	if (read(buffer, len, &_tee_ltc_prng.state) != len)
-		return TEE_ERROR_BAD_STATE;
+	if (aes_setup(key, key_len, 0, &skey))
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	memcpy(enc_key, skey.rijndael.eK, sizeof(skey.rijndael.eK));
+	*rounds = skey.rijndael.Nr;
 	return TEE_SUCCESS;
+}
 
+void crypto_aes_enc_block(const void *enc_key, unsigned int rounds,
+			  const void *src, void *dst)
+{
+	symmetric_key skey;
 
-#else
-	return get_rng_array(buffer, len);
-#endif
+	memcpy(skey.rijndael.eK, enc_key, sizeof(skey.rijndael.eK));
+	skey.rijndael.Nr = rounds;
+	if (aes_ecb_encrypt(src, dst, &skey))
+		panic();
 }

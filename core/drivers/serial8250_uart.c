@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2015, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <compiler.h>
@@ -31,6 +9,7 @@
 #include <io.h>
 #include <keep.h>
 #include <util.h>
+#include <kernel/dt.h>
 
 /* uart register defines */
 #define UART_RHR	0x0
@@ -120,3 +99,69 @@ void serial8250_uart_init(struct serial8250_uart_data *pd, paddr_t base,
 	 * everything for uart0 is ready now.
 	 */
 }
+
+#ifdef CFG_DT
+
+static struct serial_chip *serial8250_uart_dev_alloc(void)
+{
+	struct serial8250_uart_data *pd = malloc(sizeof(*pd));
+
+	if (!pd)
+		return NULL;
+	return &pd->chip;
+}
+
+static int serial8250_uart_dev_init(struct serial_chip *chip,
+			       const void *fdt,
+			       int offs,
+			       const char *parms)
+{
+	struct serial8250_uart_data *pd =
+		container_of(chip, struct serial8250_uart_data, chip);
+	vaddr_t vbase;
+	paddr_t pbase;
+	size_t size;
+
+	if (parms && parms[0])
+		IMSG("serial8250_uart: device parameters ignored (%s)", parms);
+
+	if (dt_map_dev(fdt, offs, &vbase, &size) < 0)
+		return -1;
+
+	if (size < SERIAL8250_UART_REG_SIZE) {
+		EMSG("serial8250_uart: register size too small: %zx", size);
+		return -1;
+	}
+
+	pbase = virt_to_phys((void *)vbase);
+	serial8250_uart_init(pd, pbase, 0, 0);
+
+	return 0;
+}
+
+static void serial8250_uart_dev_free(struct serial_chip *chip)
+{
+	struct serial8250_uart_data *pd =
+	  container_of(chip,  struct serial8250_uart_data, chip);
+
+	free(pd);
+}
+
+static const struct serial_driver serial8250_driver = {
+	.dev_alloc = serial8250_uart_dev_alloc,
+	.dev_init = serial8250_uart_dev_init,
+	.dev_free = serial8250_uart_dev_free,
+};
+
+static const struct dt_device_match serial8250_match_table[] = {
+	{ .compatible = "snps,dw-apb-uart" },
+	{ 0 }
+};
+
+const struct dt_driver serial8250_dt_driver __dt_driver = {
+	.name = "serial8250_uart",
+	.match_table = serial8250_match_table,
+	.driver = &serial8250_driver,
+};
+
+#endif /* CFG_DT */

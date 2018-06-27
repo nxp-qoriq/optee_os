@@ -1,34 +1,13 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2015, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <arm.h>
 #include <assert.h>
 #include <compiler.h>
 #include <console.h>
+#include <crypto/crypto.h>
 #include <inttypes.h>
 #include <keep.h>
 #include <kernel/asan.h>
@@ -36,6 +15,7 @@
 #include <kernel/linker.h>
 #include <kernel/misc.h>
 #include <kernel/panic.h>
+#include <kernel/tee_misc.h>
 #include <kernel/thread.h>
 #include <malloc.h>
 #include <mm/core_memprot.h>
@@ -46,7 +26,6 @@
 #include <sm/psci.h>
 #include <sm/tee_mon.h>
 #include <stdio.h>
-#include <tee/tee_cryp_provider.h>
 #include <trace.h>
 #include <utee_defines.h>
 #include <util.h>
@@ -76,7 +55,11 @@
 #define PADDR_INVALID		ULONG_MAX
 
 #if defined(CFG_BOOT_SECONDARY_REQUEST)
-paddr_t ns_entry_addrs[CFG_TEE_CORE_NB_CORE];
+struct ns_entry_context {
+	uintptr_t entry_point;
+	uintptr_t context_id;
+};
+struct ns_entry_context ns_entry_contexts[CFG_TEE_CORE_NB_CORE];
 static uint32_t spin_table[CFG_TEE_CORE_NB_CORE];
 #endif
 
@@ -92,6 +75,10 @@ KEEP_PAGER(sem_cpu_sync);
 
 #ifdef CFG_DT
 static void *dt_blob_addr;
+#endif
+
+#ifdef CFG_SECONDARY_INIT_CNTFRQ
+static uint32_t cntfrq;
 #endif
 
 /* May be overridden in plat-$(PLATFORM)/main.c */
@@ -183,7 +170,150 @@ static void init_vfp_sec(void)
 }
 #endif
 
+#ifdef CFG_SECONDARY_INIT_CNTFRQ
+static void primary_save_cntfrq(void)
+{
+	assert(cntfrq == 0);
+
+	/*
+	 * CNTFRQ should be initialized on the primary CPU by a
+	 * previous boot stage
+	 */
+	cntfrq = read_cntfrq();
+}
+
+static void secondary_init_cntfrq(void)
+{
+	assert(cntfrq != 0);
+	write_cntfrq(cntfrq);
+}
+#else /* CFG_SECONDARY_INIT_CNTFRQ */
+static void primary_save_cntfrq(void)
+{
+}
+
+static void secondary_init_cntfrq(void)
+{
+}
+#endif
+
+#ifdef CFG_CORE_SANITIZE_KADDRESS
+static void init_run_constructors(void)
+{
+	const vaddr_t *ctor;
+
+	for (ctor = &__ctor_list; ctor < &__ctor_end; ctor++)
+		((void (*)(void))(*ctor))();
+}
+
+static void init_asan(void)
+{
+
+	/*
+	 * CFG_ASAN_SHADOW_OFFSET is also supplied as
+	 * -fasan-shadow-offset=$(CFG_ASAN_SHADOW_OFFSET) to the compiler.
+	 * Since all the needed values to calculate the value of
+	 * CFG_ASAN_SHADOW_OFFSET isn't available in to make we need to
+	 * calculate it in advance and hard code it into the platform
+	 * conf.mk. Here where we have all the needed values we double
+	 * check that the compiler is supplied the correct value.
+	 */
+
+#define __ASAN_SHADOW_START \
+	ROUNDUP(TEE_RAM_VA_START + (TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
+	assert(__ASAN_SHADOW_START == (vaddr_t)&__asan_shadow_start);
+#define __CFG_ASAN_SHADOW_OFFSET \
+	(__ASAN_SHADOW_START - (TEE_RAM_VA_START / 8))
+	COMPILE_TIME_ASSERT(CFG_ASAN_SHADOW_OFFSET == __CFG_ASAN_SHADOW_OFFSET);
+#undef __ASAN_SHADOW_START
+#undef __CFG_ASAN_SHADOW_OFFSET
+
+	/*
+	 * Assign area covered by the shadow area, everything from start up
+	 * to the beginning of the shadow area.
+	 */
+	asan_set_shadowed((void *)TEE_TEXT_VA_START, &__asan_shadow_start);
+
+	/*
+	 * Add access to areas that aren't opened automatically by a
+	 * constructor.
+	 */
+	asan_tag_access(&__initcall_start, &__initcall_end);
+	asan_tag_access(&__ctor_list, &__ctor_end);
+	asan_tag_access(__rodata_start, __rodata_end);
 #ifdef CFG_WITH_PAGER
+	asan_tag_access(__pageable_start, __pageable_end);
+#endif /*CFG_WITH_PAGER*/
+	asan_tag_access(__nozi_start, __nozi_end);
+	asan_tag_access(__exidx_start, __exidx_end);
+	asan_tag_access(__extab_start, __extab_end);
+
+	init_run_constructors();
+
+	/* Everything is tagged correctly, let's start address sanitizing. */
+	asan_start();
+}
+#else /*CFG_CORE_SANITIZE_KADDRESS*/
+static void init_asan(void)
+{
+}
+#endif /*CFG_CORE_SANITIZE_KADDRESS*/
+
+#ifdef CFG_WITH_PAGER
+
+#ifdef CFG_CORE_SANITIZE_KADDRESS
+static void carve_out_asan_mem(tee_mm_pool_t *pool)
+{
+	const size_t s = pool->hi - pool->lo;
+	tee_mm_entry_t *mm;
+	paddr_t apa = ASAN_MAP_PA;
+	size_t asz = ASAN_MAP_SZ;
+
+	if (core_is_buffer_outside(apa, asz, pool->lo, s))
+		return;
+
+	/* Reserve the shadow area */
+	if (!core_is_buffer_inside(apa, asz, pool->lo, s)) {
+		if (apa < pool->lo) {
+			/*
+			 * ASAN buffer is overlapping with the beginning of
+			 * the pool.
+			 */
+			asz -= pool->lo - apa;
+			apa = pool->lo;
+		} else {
+			/*
+			 * ASAN buffer is overlapping with the end of the
+			 * pool.
+			 */
+			asz = pool->hi - apa;
+		}
+	}
+	mm = tee_mm_alloc2(pool, apa, asz);
+	assert(mm);
+}
+#else
+static void carve_out_asan_mem(tee_mm_pool_t *pool __unused)
+{
+}
+#endif
+
+static void init_vcore(tee_mm_pool_t *mm_vcore)
+{
+	const vaddr_t begin = TEE_RAM_VA_START;
+	vaddr_t end = TEE_RAM_VA_START + TEE_RAM_VA_SIZE;
+
+#ifdef CFG_CORE_SANITIZE_KADDRESS
+	/* Carve out asan memory, flat maped after core memory */
+	if (end > ASAN_SHADOW_PA)
+		end = ASAN_MAP_PA;
+#endif
+
+	if (!tee_mm_init(mm_vcore, begin, end, SMALL_PAGE_SHIFT,
+			 TEE_MM_POOL_NO_FLAGS))
+		panic("tee_mm_vcore init failed");
+}
+
 static void init_runtime(unsigned long pageable_part)
 {
 	size_t n;
@@ -206,6 +336,8 @@ static void init_runtime(unsigned long pageable_part)
 
 	thread_init_boot_thread();
 
+	init_asan();
+
 	malloc_add_pool(__heap1_start, __heap1_end - __heap1_start);
 	malloc_add_pool(__heap2_start, __heap2_end - __heap2_start);
 
@@ -213,13 +345,15 @@ static void init_runtime(unsigned long pageable_part)
 	IMSG_RAW("\n");
 	IMSG("Pager is enabled. Hashes: %zu bytes", hash_size);
 	assert(hashes);
-	memcpy(hashes, __tmp_hashes_start, hash_size);
+	asan_memcpy_unchecked(hashes, __tmp_hashes_start, hash_size);
 
 	/*
 	 * Need tee_mm_sec_ddr initialized to be able to allocate secure
 	 * DDR below.
 	 */
 	teecore_init_ta_ram();
+
+	carve_out_asan_mem(&tee_mm_sec_ddr);
 
 	mm = tee_mm_alloc(&tee_mm_sec_ddr, pageable_size);
 	assert(mm);
@@ -234,7 +368,7 @@ static void init_runtime(unsigned long pageable_part)
 		phys_to_virt(pageable_part,
 			     core_mmu_get_type_by_pa(pageable_part)),
 		__pageable_part_end - __pageable_part_start);
-	memcpy(paged_store, __init_start, init_size);
+	asan_memcpy_unchecked(paged_store, __init_start, init_size);
 
 	/* Check that hashes of what's in pageable area is OK */
 	DMSG("Checking hashes of pageable area");
@@ -262,10 +396,7 @@ static void init_runtime(unsigned long pageable_part)
 	 * Initialize the virtual memory pool used for main_mmu_l2_ttb which
 	 * is supplied to tee_pager_init() below.
 	 */
-	if (!tee_mm_init(&tee_mm_vcore, TEE_RAM_VA_START,
-			 TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE,
-			 SMALL_PAGE_SHIFT, TEE_MM_POOL_NO_FLAGS))
-		panic("tee_mm_vcore init failed");
+	init_vcore(&tee_mm_vcore);
 
 	/*
 	 * Assign alias area for pager end of the small page block the rest
@@ -276,16 +407,14 @@ static void init_runtime(unsigned long pageable_part)
 	mm = tee_mm_alloc2(&tee_mm_vcore,
 		(vaddr_t)tee_mm_vcore.hi - TZSRAM_SIZE, TZSRAM_SIZE);
 	assert(mm);
-	tee_pager_init(mm);
+	tee_pager_set_alias_area(mm);
 
 	/*
-	 * Claim virtual memory which isn't paged, note that there migth be
-	 * a gap between tee_mm_vcore.lo and TEE_RAM_START which is also
-	 * claimed to avoid later allocations to get that memory.
+	 * Claim virtual memory which isn't paged.
 	 * Linear memory (flat map core memory) ends there.
 	 */
-	mm = tee_mm_alloc2(&tee_mm_vcore, tee_mm_vcore.lo,
-			(vaddr_t)(__pageable_start - tee_mm_vcore.lo));
+	mm = tee_mm_alloc2(&tee_mm_vcore, VCORE_UNPG_RX_PA,
+			   (vaddr_t)(__pageable_start - VCORE_UNPG_RX_PA));
 	assert(mm);
 
 	/*
@@ -303,67 +432,17 @@ static void init_runtime(unsigned long pageable_part)
 	tee_pager_add_pages((vaddr_t)__pageable_start + init_size,
 			(pageable_size - init_size) / SMALL_PAGE_SIZE, true);
 
+	/*
+	 * There may be physical pages in TZSRAM before the core load address.
+	 * These pages can be added to the physical pages pool of the pager.
+	 * This setup may happen when a the secure bootloader runs in TZRAM
+	 * and its memory can be reused by OP-TEE once boot stages complete.
+	 */
+	tee_pager_add_pages(tee_mm_vcore.lo,
+			(VCORE_UNPG_RX_PA - tee_mm_vcore.lo) / SMALL_PAGE_SIZE,
+			true);
 }
 #else
-
-#ifdef CFG_CORE_SANITIZE_KADDRESS
-static void init_run_constructors(void)
-{
-	const vaddr_t *ctor;
-
-	for (ctor = &__ctor_list; ctor < &__ctor_end; ctor++)
-		((void (*)(void))(*ctor))();
-}
-
-static void init_asan(void)
-{
-
-	/*
-	 * CFG_ASAN_SHADOW_OFFSET is also supplied as
-	 * -fasan-shadow-offset=$(CFG_ASAN_SHADOW_OFFSET) to the compiler.
-	 * Since all the needed values to calculate the value of
-	 * CFG_ASAN_SHADOW_OFFSET isn't available in to make we need to
-	 * calculate it in advance and hard code it into the platform
-	 * conf.mk. Here where we have all the needed values we double
-	 * check that the compiler is supplied the correct value.
-	 */
-
-#define __ASAN_SHADOW_START \
-	ROUNDUP(TEE_RAM_VA_START + (CFG_TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
-	assert(__ASAN_SHADOW_START == (vaddr_t)&__asan_shadow_start);
-#define __CFG_ASAN_SHADOW_OFFSET \
-	(__ASAN_SHADOW_START - (TEE_RAM_VA_START / 8))
-	COMPILE_TIME_ASSERT(CFG_ASAN_SHADOW_OFFSET == __CFG_ASAN_SHADOW_OFFSET);
-#undef __ASAN_SHADOW_START
-#undef __CFG_ASAN_SHADOW_OFFSET
-
-	/*
-	 * Assign area covered by the shadow area, everything from start up
-	 * to the beginning of the shadow area.
-	 */
-	asan_set_shadowed((void *)TEE_TEXT_VA_START, &__asan_shadow_start);
-
-	/*
-	 * Add access to areas that aren't opened automatically by a
-	 * constructor.
-	 */
-	asan_tag_access(&__initcall_start, &__initcall_end);
-	asan_tag_access(&__ctor_list, &__ctor_end);
-	asan_tag_access(__rodata_start, __rodata_end);
-	asan_tag_access(__nozi_start, __nozi_end);
-	asan_tag_access(__exidx_start, __exidx_end);
-	asan_tag_access(__extab_start, __extab_end);
-
-	init_run_constructors();
-
-	/* Everything is tagged correctly, let's start address sanitizing. */
-	asan_start();
-}
-#else /*CFG_CORE_SANITIZE_KADDRESS*/
-static void init_asan(void)
-{
-}
-#endif /*CFG_CORE_SANITIZE_KADDRESS*/
 
 static void init_runtime(unsigned long pageable_part __unused)
 {
@@ -672,18 +751,10 @@ static struct core_mmu_phys_mem *get_memory(void *fdt, size_t *nelems)
 	return mem;
 }
 
-static int config_nsmem(void *fdt)
+static int mark_static_shm_as_reserved(void *fdt)
 {
-	struct core_mmu_phys_mem *mem;
-	size_t nelems;
 	vaddr_t shm_start;
 	vaddr_t shm_end;
-
-	mem = get_memory(fdt, &nelems);
-	if (mem)
-		core_mmu_set_discovered_nsec_ddr(mem, nelems);
-	else
-		DMSG("No non-secure memory found in FDT");
 
 	core_mmu_get_mem_by_type(MEM_AREA_NSEC_SHM, &shm_start, &shm_end);
 	if (shm_start != shm_end)
@@ -727,23 +798,32 @@ static void init_fdt(unsigned long phys_fdt)
 		panic();
 	}
 
+	dt_blob_addr = fdt;
+}
+
+static void update_fdt(void)
+{
+	void *fdt = get_dt_blob();
+	int ret;
+
+	if (!fdt)
+		return;
+
 	if (add_optee_dt_node(fdt))
 		panic("Failed to add OP-TEE Device Tree node");
 
 	if (config_psci(fdt))
 		panic("Failed to config PSCI");
 
-	if (config_nsmem(fdt))
+	if (mark_static_shm_as_reserved(fdt))
 		panic("Failed to config non-secure memory");
 
 	ret = fdt_pack(fdt);
 	if (ret < 0) {
 		EMSG("Failed to pack Device Tree at 0x%" PRIxPA ": error %d",
-		     phys_fdt, ret);
+		     virt_to_phys(fdt), ret);
 		panic();
 	}
-
-	dt_blob_addr = fdt;
 }
 
 #else
@@ -751,11 +831,58 @@ static void init_fdt(unsigned long phys_fdt __unused)
 {
 }
 
+static void update_fdt(void)
+{
+}
+
 static void reset_dt_references(void)
 {
 }
 
+void *get_dt_blob(void)
+{
+	return NULL;
+}
+
+static struct core_mmu_phys_mem *get_memory(void *fdt __unused,
+					     size_t *nelems __unused)
+{
+	return NULL;
+}
+
 #endif /*!CFG_DT*/
+
+static void discover_nsec_memory(void)
+{
+	struct core_mmu_phys_mem *mem;
+	size_t nelems;
+	void *fdt = get_dt_blob();
+
+	if (fdt) {
+		mem = get_memory(fdt, &nelems);
+		if (mem) {
+			core_mmu_set_discovered_nsec_ddr(mem, nelems);
+			return;
+		}
+
+		DMSG("No non-secure memory found in FDT");
+	}
+
+	nelems = (&__end_phys_ddr_overall_section -
+		  &__start_phys_ddr_overall_section);
+	if (!nelems)
+		return;
+
+	/* Platform cannot define nsec_ddr && overall_ddr */
+	assert(&__start_phys_nsec_ddr_section == &__end_phys_nsec_ddr_section);
+
+	mem = calloc(nelems, sizeof(*mem));
+	if (!mem)
+		panic();
+
+	memcpy(mem, &__start_phys_ddr_overall_section, sizeof(*mem) * nelems);
+	core_mmu_set_discovered_nsec_ddr(mem, nelems);
+}
 
 static void init_primary_helper(unsigned long pageable_part,
 				unsigned long nsec_entry, unsigned long fdt)
@@ -768,6 +895,7 @@ static void init_primary_helper(unsigned long pageable_part,
 	 * its functions.
 	 */
 	thread_set_exceptions(THREAD_EXCP_ALL);
+	primary_save_cntfrq();
 	init_vfp_sec();
 	init_runtime(pageable_part);
 
@@ -775,7 +903,9 @@ static void init_primary_helper(unsigned long pageable_part,
 	thread_init_per_cpu();
 	init_sec_mon(nsec_entry);
 	init_fdt(fdt);
-	configure_console_from_dt(fdt);
+	update_fdt();
+	configure_console_from_dt();
+	discover_nsec_memory();
 
 	IMSG("OP-TEE version: %s", core_v_str);
 
@@ -801,6 +931,7 @@ static void init_secondary_helper(unsigned long nsec_entry)
 	 */
 	thread_set_exceptions(THREAD_EXCP_ALL);
 
+	secondary_init_cntfrq();
 	thread_init_per_cpu();
 	init_sec_mon(nsec_entry);
 	main_secondary_init_gic();
@@ -840,12 +971,20 @@ void generic_boot_init_secondary(unsigned long nsec_entry)
 #endif
 
 #if defined(CFG_BOOT_SECONDARY_REQUEST)
+void generic_boot_set_core_ns_entry(size_t core_idx, uintptr_t entry,
+				    uintptr_t context_id)
+{
+	ns_entry_contexts[core_idx].entry_point = entry;
+	ns_entry_contexts[core_idx].context_id = context_id;
+	dsb_ishst();
+}
+
 int generic_boot_core_release(size_t core_idx, paddr_t entry)
 {
 	if (!core_idx || core_idx >= CFG_TEE_CORE_NB_CORE)
 		return -1;
 
-	ns_entry_addrs[core_idx] = entry;
+	ns_entry_contexts[core_idx].entry_point = entry;
 	dmb();
 	spin_table[core_idx] = 1;
 	dsb();
@@ -858,16 +997,16 @@ int generic_boot_core_release(size_t core_idx, paddr_t entry)
  * spin until secondary boot request, then returns with
  * the secondary core entry address.
  */
-paddr_t generic_boot_core_hpen(void)
+struct ns_entry_context *generic_boot_core_hpen(void)
 {
 #ifdef CFG_PSCI_ARM32
-	return ns_entry_addrs[get_core_pos()];
+	return &ns_entry_contexts[get_core_pos()];
 #else
 	do {
 		wfe();
 	} while (!spin_table[get_core_pos()]);
 	dmb();
-	return ns_entry_addrs[get_core_pos()];
+	return &ns_entry_contexts[get_core_pos()];
 #endif
 }
 #endif

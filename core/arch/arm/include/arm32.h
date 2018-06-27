@@ -1,29 +1,7 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2016, Linaro Limited
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef ARM32_H
@@ -32,12 +10,6 @@
 #include <sys/cdefs.h>
 #include <stdint.h>
 #include <util.h>
-
-#define CORTEX_A7_PART_NUM		0xC07
-#define CORTEX_A9_PART_NUM		0xC09
-
-#define MIDR_PRIMARY_PART_NUM_SHIFT	4
-#define MIDR_PRIMARY_PART_NUM_WIDTH	12
 
 #define CPSR_MODE_MASK	ARM32_CPSR_MODE_MASK
 #define CPSR_MODE_USR	ARM32_CPSR_MODE_USR
@@ -90,13 +62,14 @@
 #define SCTLR_AFE	BIT32(29)
 #define SCTLR_TE	BIT32(30)
 
+/* Only valid for Cortex-A15 */
+#define ACTLR_CA15_ENABLE_INVALIDATE_BTB	BIT(0)
+/* Only valid for Cortex-A8 */
+#define ACTLR_CA8_ENABLE_INVALIDATE_BTB		BIT(6)
+/* Only valid for Cortex-A9 */
+#define ACTLR_CA9_WFLZ				BIT(3)
+
 #define ACTLR_SMP	BIT32(6)
-#define ACTLR_DODMBS	BIT32(10)
-#define ACTLR_L2RADIS	BIT32(11)
-#define ACTLR_L1RADIS	BIT32(12)
-#define ACTLR_L1PCTL	BIT32(13)
-#define ACTLR_DDVM	BIT32(15)
-#define ACTLR_DDI	BIT32(28)
 
 #define NSACR_CP10	BIT32(10)
 #define NSACR_CP11	BIT32(11)
@@ -178,7 +151,24 @@
 /* Valid if FSR.LPAE is 0 */
 #define FSR_FS_MASK		(BIT32(10) | (BIT32(4) - 1))
 
+/* ID_PFR1 bit fields */
+#define IDPFR1_VIRT_SHIFT            12
+#define IDPFR1_VIRT_MASK             (0xF << IDPFR1_VIRT_SHIFT)
+#define IDPFR1_GENTIMER_SHIFT        16
+#define IDPFR1_GENTIMER_MASK         (0xF << IDPFR1_GENTIMER_SHIFT)
+
 #ifndef ASM
+static inline uint32_t read_midr(void)
+{
+	uint32_t midr;
+
+	asm volatile ("mrc	p15, 0, %[midr], c0, c0, 0"
+			: [midr] "=r" (midr)
+	);
+
+	return midr;
+}
+
 static inline uint32_t read_mpidr(void)
 {
 	uint32_t mpidr;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright 2017 NXP
  *
@@ -33,7 +34,9 @@
 #include <kernel/dt.h>
 #include <kernel/generic_boot.h>
 #include <kernel/panic.h>
+#ifdef CFG_DT
 #include <libfdt.h>
+#endif
 #include <mm/core_mmu.h>
 #include <mm/core_memprot.h>
 #include <util.h>
@@ -60,9 +63,9 @@ void imx_wdog_restart(void)
 	write16(val, wdog_base + WCR_OFF);
 	dsb();
 
-	if (read32(wdog_base + WDT_WCR) & WDT_WCR_WDE) {
-		write32(WDT_SEQ1, wdog_base + WDT_WSR);
-		write32(WDT_SEQ2, wdog_base + WDT_WSR);
+	if (read16(wdog_base + WDT_WCR) & WDT_WCR_WDE) {
+		write16(WDT_SEQ1, wdog_base + WDT_WSR);
+		write16(WDT_SEQ2, wdog_base + WDT_WSR);
 	}
 
 	write16(val, wdog_base + WCR_OFF);
@@ -73,7 +76,8 @@ void imx_wdog_restart(void)
 }
 KEEP_PAGER(imx_wdog_restart);
 
-static TEE_Result imx_wdog_init(void)
+#ifdef CFG_DT
+static TEE_Result imx_wdog_base(vaddr_t *wdog_vbase)
 {
 	enum teecore_memtypes mtype;
 	void *fdt;
@@ -154,8 +158,24 @@ static TEE_Result imx_wdog_init(void)
 		return TEE_ERROR_GENERIC;
 	}
 
-	wdog_base = vbase;
+	*wdog_vbase = vbase;
 
 	return TEE_SUCCESS;
+}
+#else
+register_phys_mem(MEM_AREA_IO_SEC, WDOG_BASE, CORE_MMU_DEVICE_SIZE);
+static TEE_Result imx_wdog_base(vaddr_t *wdog_vbase)
+{
+	*wdog_vbase = (vaddr_t)phys_to_virt(WDOG_BASE, MEM_AREA_IO_SEC);
+	return TEE_SUCCESS;
+}
+#endif
+
+static TEE_Result imx_wdog_init(void)
+{
+#ifdef PLATFORM_FLAVOR_mx7dsabresd
+	ext_reset = true;
+#endif
+	return imx_wdog_base(&wdog_base);
 }
 driver_init(imx_wdog_init);

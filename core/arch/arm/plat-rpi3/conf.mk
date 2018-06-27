@@ -1,7 +1,6 @@
 include core/arch/arm/cpu/cortex-armv8-0.mk
 
-# 32-bit flags
-core_arm32-platform-aflags	+= -mfpu=neon
+$(call force,CFG_TEE_CORE_NB_CORE,4)
 
 $(call force,CFG_8250_UART,y)
 $(call force,CFG_GENERIC_BOOT,y)

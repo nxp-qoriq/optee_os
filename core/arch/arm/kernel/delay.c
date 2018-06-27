@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (C) 2017, Fuzhou Rockchip Electronics Co., Ltd.
  * All rights reserved.
@@ -37,4 +38,9 @@ void udelay(uint32_t us)
 
 	while (read_cntpct() - start <= target)
 		;
+}
+
+void mdelay(uint32_t ms)
+{
+	udelay(1000 * ms);
 }

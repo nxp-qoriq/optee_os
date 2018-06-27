@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <compiler.h>
 #include <stdbool.h>
@@ -60,15 +38,30 @@ struct ta_session {
 static TAILQ_HEAD(ta_sessions, ta_session) ta_sessions =
 		TAILQ_HEAD_INITIALIZER(ta_sessions);
 
-static uint32_t ta_ref_count;
-static bool context_init;
+static bool init_done;
 
 /* From user_ta_header.c, built within TA */
 extern uint8_t ta_heap[];
 extern const size_t ta_heap_size;
+extern struct ta_head ta_head;
 
 uint32_t ta_param_types;
 TEE_Param ta_params[TEE_NUM_PARAMS];
+
+static TEE_Result init_instance(void)
+{
+	trace_set_level(tahead_get_trace_level());
+	__utee_gprof_init();
+	malloc_add_pool(ta_heap, ta_heap_size);
+	_TEE_MathAPI_Init();
+	return TA_CreateEntryPoint();
+}
+
+static void uninit_instance(void)
+{
+	__utee_gprof_fini();
+	TA_DestroyEntryPoint();
+}
 
 static void ta_header_save_params(uint32_t param_types,
 				  TEE_Param params[TEE_NUM_PARAMS])
@@ -95,25 +88,15 @@ static struct ta_session *ta_header_get_session(uint32_t session_id)
 static TEE_Result ta_header_add_session(uint32_t session_id)
 {
 	struct ta_session *itr = ta_header_get_session(session_id);
+	TEE_Result res;
 
 	if (itr)
 		return TEE_SUCCESS;
 
-	ta_ref_count++;
-
-	if (ta_ref_count == 1) {
-		TEE_Result res;
-
-		if (!context_init) {
-			trace_set_level(tahead_get_trace_level());
-			__utee_gprof_init();
-			malloc_add_pool(ta_heap, ta_heap_size);
-			_TEE_MathAPI_Init();
-			context_init = true;
-		}
-
-		res = TA_CreateEntryPoint();
-		if (res != TEE_SUCCESS)
+	if (!init_done) {
+		init_done = true;
+		res = init_instance();
+		if (res)
 			return res;
 	}
 
@@ -131,17 +114,18 @@ static TEE_Result ta_header_add_session(uint32_t session_id)
 static void ta_header_remove_session(uint32_t session_id)
 {
 	struct ta_session *itr;
+	bool keep_alive;
 
 	TAILQ_FOREACH(itr, &ta_sessions, link) {
 		if (itr->session_id == session_id) {
 			TAILQ_REMOVE(&ta_sessions, itr, link);
 			TEE_Free(itr);
 
-			ta_ref_count--;
-			if (ta_ref_count == 0) {
-				__utee_gprof_fini();
-				TA_DestroyEntryPoint();
-			}
+			keep_alive =
+				(ta_head.flags & TA_FLAG_SINGLE_INSTANCE) &&
+				(ta_head.flags & TA_FLAG_INSTANCE_KEEP_ALIVE);
+			if (TAILQ_EMPTY(&ta_sessions) && !keep_alive)
+				uninit_instance();
 
 			return;
 		}
