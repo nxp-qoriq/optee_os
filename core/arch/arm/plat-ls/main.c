@@ -148,15 +148,108 @@ void console_init(void)
 	register_serial_console(&console_data.chip);
 }
 
+#if defined(PLATFORM_FLAVOR_ls1043ardb)
+/******************************************************************************
+ * For LS1043a rev1.0, GIC base address align with 4k.
+ * For LS1043a rev1.1, if DCFG_GIC400_ALIGN[GIC_ADDR_BIT]
+ * is set, GIC base address align with 4K, or else align
+ * with 64k.
+ *****************************************************************************/
+static void get_gic_offset(vaddr_t *gicc_base, vaddr_t *gicd_base)
+{
+#define NXP_DCFG_ADDR			0x01EE0000
+#define NXP_SCFG_ADDR			0x01570000
+#define DCFG_SVR_OFFSET			0x0A4
+#define SCFG_GIC400_ADDR_ALIGN_OFFSET	0x0188
+#define REV1_1				0x11
+#define GIC_ADDR_BIT			31
+#define REGISTER_SIZE			4
+	vaddr_t ccsr_svr;
+	vaddr_t gic_align;
+	uint32_t val;
+
+	ccsr_svr = (vaddr_t)phys_to_virt(NXP_DCFG_ADDR + DCFG_SVR_OFFSET,
+							MEM_AREA_IO_SEC);
+	if (!ccsr_svr) {
+		if (!core_mmu_add_mapping(MEM_AREA_IO_SEC,
+						NXP_DCFG_ADDR + DCFG_SVR_OFFSET,
+						REGISTER_SIZE)) {
+			IMSG("Unable to map CCSR SVR Register. Mapping now...");
+		}
+
+		ccsr_svr = (vaddr_t)phys_to_virt(NXP_DCFG_ADDR
+						+ DCFG_SVR_OFFSET,
+						MEM_AREA_IO_SEC);
+		if (!ccsr_svr)
+			panic();
+	}
+
+	val = __compiler_bswap32(read32(ccsr_svr));
+
+	if ((val & 0xff) == REV1_1) {
+		gic_align = (vaddr_t)phys_to_virt(NXP_SCFG_ADDR
+						+ SCFG_GIC400_ADDR_ALIGN_OFFSET,
+						MEM_AREA_IO_SEC);
+		if (!gic_align) {
+			if (!core_mmu_add_mapping(MEM_AREA_IO_SEC,
+						NXP_SCFG_ADDR
+						+ SCFG_GIC400_ADDR_ALIGN_OFFSET,
+						4)) {
+				IMSG("Unable to map SCFG GIC Register.");
+				IMSG("Mapping now...");
+			}
+
+			gic_align = (vaddr_t)phys_to_virt(NXP_SCFG_ADDR
+						+ SCFG_GIC400_ADDR_ALIGN_OFFSET,
+						MEM_AREA_IO_SEC);
+
+			if (!gic_align)
+				panic();
+		}
+
+		val = __compiler_bswap32(read32(gic_align));
+
+		if (val & (1 << GIC_ADDR_BIT)) {
+			*gicc_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICC_4K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+			*gicd_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICD_4K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+		} else {
+			*gicc_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICC_64K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+			*gicd_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICD_64K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+		}
+	} else {
+		*gicc_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICC_4K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+		*gicd_base = (vaddr_t)phys_to_virt(GIC_BASE
+							+ GICD_4K_ADDR_OFFSET,
+							  MEM_AREA_IO_SEC);
+	}
+}
+#endif
+/*******************************************************************************
+ * This function initializes the soc from the BL31 module
+ ******************************************************************************/
 void main_init_gic(void)
 {
-	vaddr_t gicc_base;
-	vaddr_t gicd_base;
+	vaddr_t gicc_base = 0x0;
+	vaddr_t gicd_base = 0x0;
 
+#if defined(PLATFORM_FLAVOR_ls1043ardb)
+	get_gic_offset(&gicc_base, &gicd_base);
+#else
 	gicc_base = (vaddr_t)phys_to_virt(GIC_BASE + GICC_OFFSET,
 					  MEM_AREA_IO_SEC);
 	gicd_base = (vaddr_t)phys_to_virt(GIC_BASE + GICD_OFFSET,
 					  MEM_AREA_IO_SEC);
+#endif
 
 	if (!gicc_base || !gicd_base)
 		panic();
