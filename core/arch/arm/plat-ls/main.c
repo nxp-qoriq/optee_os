@@ -245,13 +245,17 @@ void main_init_gic(void)
 #if defined(PLATFORM_FLAVOR_ls1043ardb)
 	get_gic_offset(&gicc_base, &gicd_base);
 #else
+#if !defined(CFG_ARM_GICV3)
 	gicc_base = (vaddr_t)phys_to_virt(GIC_BASE + GICC_OFFSET,
 					  MEM_AREA_IO_SEC);
+	if (!gicc_base)
+		panic();
+#endif
 	gicd_base = (vaddr_t)phys_to_virt(GIC_BASE + GICD_OFFSET,
 					  MEM_AREA_IO_SEC);
 #endif
 
-	if (!gicc_base || !gicd_base)
+	if (!gicd_base)
 		panic();
 
 	/* Initialize GIC */

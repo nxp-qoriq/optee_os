@@ -84,7 +84,6 @@
 /*  DUART 1 */
 #define UART0_BASE			0x021C0500
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
@@ -92,7 +91,6 @@
 /*  DUART 1 */
 #define UART0_BASE			0x021C0600
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
@@ -106,7 +104,6 @@
 #define CONSOLE_UART_CLK_IN_HZ		0xA6E49C0
 #define UART1_BASE			0x021D0000
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
