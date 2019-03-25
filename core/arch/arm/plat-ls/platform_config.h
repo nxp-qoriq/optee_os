@@ -60,20 +60,30 @@
 #define GICD_OFFSET			0x1000
 #endif
 
-#if defined(PLATFORM_FLAVOR_ls1043ardb) || defined(PLATFORM_FLAVOR_ls1046ardb) \
-|| defined(PLATFORM_FLAVOR_ls1012ardb) || defined(PLATFORM_FLAVOR_ls1012afrwy)
+#if defined(PLATFORM_FLAVOR_ls1043ardb)
+ /*  DUART 1 */
+ #define UART0_BASE			0x021C0500
+ #define GIC_BASE			0x01400000
+#define GICC_4K_ADDR_OFFSET		0x2000
+#define GICD_4K_ADDR_OFFSET		0x1000
+#define GICC_64K_ADDR_OFFSET		0x20000
+#define GICD_64K_ADDR_OFFSET		0x10000
+#endif
+
+#if defined(PLATFORM_FLAVOR_ls1046ardb) || defined(PLATFORM_FLAVOR_ls1012ardb)\
+|| defined(PLATFORM_FLAVOR_ls1012afrwy)
+
 /*  DUART 1 */
 #define UART0_BASE			0x021C0500
 #define GIC_BASE			0x01400000
-#define GICC_OFFSET			0x2000
-#define GICD_OFFSET			0x1000
+#define GICC_OFFSET			0x20000
+#define GICD_OFFSET			0x10000
 #endif
 
 #if defined(PLATFORM_FLAVOR_ls1088ardb)
 /*  DUART 1 */
 #define UART0_BASE			0x021C0500
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
@@ -81,7 +91,6 @@
 /*  DUART 1 */
 #define UART0_BASE			0x021C0600
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
@@ -95,7 +104,6 @@
 #define CONSOLE_UART_CLK_IN_HZ		0xA6E49C0
 #define UART1_BASE			0x021D0000
 #define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
 #endif
 
