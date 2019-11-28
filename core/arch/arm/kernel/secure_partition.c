@@ -149,44 +149,54 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 	struct secure_partition_boot_info *boot_info = NULL;
 	struct secure_partition_mp_info *mp_info = NULL;
 	TEE_Result res = TEE_SUCCESS;
-	vaddr_t sec_buf_addr = 0;
-	vaddr_t stack_addr = 0;
-	vaddr_t data_addr = 0;
+	vaddr_t sp_addr = 0;
+	vaddr_t image_addr = 0;
 	vaddr_t heap_addr = 0;
+	vaddr_t stack_addr = 0;
+	vaddr_t sec_buf_addr = 0;
+	unsigned int sp_size;
 
-	res = alloc_and_map_sp_fobj(spc, stmm_stack_size,
-				    TEE_MATTR_URW | TEE_MATTR_PRW, &stack_addr);
+	sp_size = ROUNDUP(stmm_image_uncompressed_size, SMALL_PAGE_SIZE) +
+			stmm_stack_size + stmm_heap_size + stmm_sec_buf_size;
+	res = alloc_and_map_sp_fobj(spc, sp_size,
+				    TEE_MATTR_PRW, &sp_addr);
 	if (res)
 		return res;
 
-	res = alloc_and_map_sp_fobj(spc, stmm_heap_size,
-				    TEE_MATTR_URW | TEE_MATTR_PRW, &heap_addr);
-	if (res)
-		return res;
-
-	res = alloc_and_map_sp_fobj(spc, stmm_image_uncompressed_size,
-				    TEE_MATTR_PRW, &data_addr);
-	if (res)
-		return res;
-
-	res = alloc_and_map_sp_fobj(spc, stmm_sec_buf_size,
-				    TEE_MATTR_URW | TEE_MATTR_PRW,
-				    &sec_buf_addr);
-	if (res)
-		return res;
+	image_addr = sp_addr;
+	heap_addr = image_addr +
+			ROUNDUP(stmm_image_uncompressed_size,
+				SMALL_PAGE_SIZE);
+	stack_addr = heap_addr + stmm_heap_size;
+	sec_buf_addr = stack_addr + stmm_stack_size;
 
 	tee_mmu_set_ctx(&spc->uctx.ctx);
-	uncompress_image((void *)data_addr, stmm_image_uncompressed_size,
+	uncompress_image((void *)image_addr, stmm_image_uncompressed_size,
 			 stmm_image, stmm_image_size);
 
-	res = vm_set_prot(&spc->uctx, data_addr,
+	res = vm_set_prot(&spc->uctx, image_addr,
 			  ROUNDUP(stmm_image_uncompressed_size,
 				  SMALL_PAGE_SIZE),
 			  TEE_MATTR_URX | TEE_MATTR_PR);
 	if (res)
 		return res;
 
-	DMSG("stmm load address %#"PRIxVA, data_addr);
+	res = vm_set_prot(&spc->uctx, heap_addr, stmm_heap_size,
+			  TEE_MATTR_URW | TEE_MATTR_PRW);
+	if (res)
+		return res;
+
+	res = vm_set_prot(&spc->uctx, stack_addr, stmm_stack_size,
+			  TEE_MATTR_URW | TEE_MATTR_PRW);
+	if (res)
+		return res;
+
+	res = vm_set_prot(&spc->uctx, sec_buf_addr, stmm_sec_buf_size,
+			  TEE_MATTR_URW | TEE_MATTR_PRW);
+	if (res)
+		return res;
+
+	DMSG("stmm load address %#"PRIxVA, image_addr);
 
 	boot_info = (struct secure_partition_boot_info *)sec_buf_addr;
 	mp_info = (struct secure_partition_mp_info *)(boot_info + 1);
@@ -195,9 +205,9 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 		.h.version = SP_PARAM_VERSION_1,
 		.h.size = sizeof(struct secure_partition_boot_info),
 		.h.attr = 0,
-		.sp_mem_base = stack_addr,
-		.sp_mem_limit = sec_buf_addr + stmm_sec_buf_size,
-		.sp_image_base = data_addr,
+		.sp_mem_base = sp_addr,
+		.sp_mem_limit = sp_addr + sp_size,
+		.sp_image_base = image_addr,
 		.sp_stack_base = stack_addr,
 		.sp_heap_base = heap_addr,
 		.sp_shared_buf_base = sec_buf_addr,
@@ -215,7 +225,7 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 
 	init_stmm_regs(spc, sec_buf_addr,
 		       (vaddr_t)(mp_info + 1) - sec_buf_addr,
-		       stack_addr + stmm_stack_size, data_addr + stmm_entry);
+		       stack_addr + stmm_stack_size, image_addr + stmm_entry);
 
 	return sec_part_enter_user_mode(spc);
 }
