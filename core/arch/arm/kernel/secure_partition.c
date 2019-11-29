@@ -243,6 +243,8 @@ TEE_Result sec_part_init_session(const TEE_UUID *uuid,
 	if (!spc)
 		return TEE_ERROR_OUT_OF_MEMORY;
 
+	spc->is_initializing = true;
+
 	sess->ctx = &spc->uctx.ctx;
 	tee_ta_push_current_session(sess);
 	res = load_stmm(spc);
@@ -251,6 +253,7 @@ TEE_Result sec_part_init_session(const TEE_UUID *uuid,
 	if (res)
 		goto err;
 
+	spc->is_initializing = false;
 	TAILQ_INSERT_TAIL(&tee_ctxes, &spc->uctx.ctx, link);
 	return TEE_SUCCESS;
 
@@ -282,43 +285,18 @@ static TEE_Result stmm_map_ns_buf(struct sec_part_ctx *spc,
 }
 
 static TEE_Result stmm_enter_open_session(struct tee_ta_session *s,
-					  struct tee_ta_param *param,
-					  TEE_ErrorOrigin *eo __unused)
+					  struct tee_ta_param *param __unused,
+					  TEE_ErrorOrigin *eo)
 {
-	struct secure_partition_boot_info *boot_info = NULL;
 	struct sec_part_ctx *spc = to_sec_part_ctx(s->ctx);
-	TEE_Result res = TEE_SUCCESS;
-	vaddr_t ns_buf_base = 0;
 
-	/*
-	 * If a buffer is supplied update sp_ns_comm_buf_base and
-	 * sp_ns_comm_buf_size.
-	 */
-	if (param->types) {
-		res = stmm_map_ns_buf(spc, param, &ns_buf_base);
-		if (res)
-			return res;
-
-		boot_info = (void *)(vaddr_t)spc->regs.x[0];
-		boot_info->sp_ns_comm_buf_base = ns_buf_base;
-		boot_info->sp_ns_comm_buf_size = param->u[0].mem.size;
+	if (spc->is_initializing) {
+		/* stmm is initialized in sec_part_init_session() */
+		*eo = TEE_ORIGIN_TEE;
+		return TEE_ERROR_BAD_STATE;
 	}
 
-	tee_ta_push_current_session(s);
-
-	res = sec_part_enter_user_mode(spc);
-	if (!res)
-		param->u[1].val.a = spc->regs.x[1];
-
-	/*
-	 * Clear out the parameter mappings added with tee_mmu_map_param()
-	 * above.
-	 */
-	tee_mmu_clean_param(&spc->uctx);
-
-	tee_ta_pop_current_session();
-
-	return res;
+	return TEE_SUCCESS;
 }
 
 static TEE_Result stmm_enter_invoke_cmd(struct tee_ta_session *s,
