@@ -21,6 +21,7 @@ static const unsigned int stmm_entry;
 static const unsigned int stmm_stack_size = 4 * SMALL_PAGE_SIZE;
 static const unsigned int stmm_heap_size = 200 * SMALL_PAGE_SIZE;
 static const unsigned int stmm_sec_buf_size = SMALL_PAGE_SIZE;
+static const unsigned int stmm_ns_comm_buf_size = SMALL_PAGE_SIZE;
 
 extern uint8_t stmm_image[];
 extern const unsigned int stmm_image_size;
@@ -154,12 +155,19 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 	vaddr_t heap_addr = 0;
 	vaddr_t stack_addr = 0;
 	vaddr_t sec_buf_addr = 0;
+	vaddr_t ns_comm_buf_addr = 0;
 	unsigned int sp_size;
 
 	sp_size = ROUNDUP(stmm_image_uncompressed_size, SMALL_PAGE_SIZE) +
 			stmm_stack_size + stmm_heap_size + stmm_sec_buf_size;
 	res = alloc_and_map_sp_fobj(spc, sp_size,
 				    TEE_MATTR_PRW, &sp_addr);
+	if (res)
+		return res;
+
+	res = alloc_and_map_sp_fobj(spc, stmm_ns_comm_buf_size,
+				    TEE_MATTR_URW | TEE_MATTR_PRW,
+				    &ns_comm_buf_addr);
 	if (res)
 		return res;
 
@@ -210,10 +218,12 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 		.sp_image_base = image_addr,
 		.sp_stack_base = stack_addr,
 		.sp_heap_base = heap_addr,
+		.sp_ns_comm_buf_base = ns_comm_buf_addr,
 		.sp_shared_buf_base = sec_buf_addr,
 		.sp_image_size = stmm_image_size,
 		.sp_pcpu_stack_size = stmm_stack_size,
 		.sp_heap_size = stmm_heap_size,
+		.sp_ns_comm_buf_size = stmm_ns_comm_buf_size,
 		.sp_shared_buf_size = stmm_sec_buf_size,
 		.num_sp_mem_regions = 6,
 		.num_cpus = 1,
@@ -222,6 +232,8 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 	mp_info->mpidr = read_mpidr_el1();
 	mp_info->linear_id = 0;
 	mp_info->flags = MP_INFO_FLAG_PRIMARY_CPU;
+	spc->ns_comm_buf_addr = ns_comm_buf_addr;
+	spc->ns_comm_buf_size = stmm_ns_comm_buf_size;
 
 	init_stmm_regs(spc, sec_buf_addr,
 		       (vaddr_t)(mp_info + 1) - sec_buf_addr,
@@ -307,24 +319,35 @@ static TEE_Result stmm_enter_invoke_cmd(struct tee_ta_session *s,
 	struct sec_part_ctx *spc = to_sec_part_ctx(s->ctx);
 	TEE_Result res = TEE_SUCCESS;
 	vaddr_t ns_buf_base = 0;
+	unsigned int ns_buf_size;
 
 	if (cmd != PTA_STMM_COMMUNICATE)
 		return TEE_ERROR_NOT_IMPLEMENTED;
+
+	ns_buf_size = param->u[0].mem.size;
+	if (ns_buf_size > spc->ns_comm_buf_size)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	res = stmm_map_ns_buf(spc, param, &ns_buf_base);
 	if (res)
 		return res;
 
 	spc->regs.x[0] = 0xc4000041; /* 64-bit MM_COMMUNICATE */
-	spc->regs.x[1] = ns_buf_base;
-	spc->regs.x[2] = param->u[0].mem.size;
+	spc->regs.x[1] = spc->ns_comm_buf_addr;
+	spc->regs.x[2] = ns_buf_size;
 	spc->regs.x[3] = 0;
 
 	tee_ta_push_current_session(s);
 
+	memcpy((void *)(spc->ns_comm_buf_addr), (void *)ns_buf_base,
+	       ns_buf_size);
+
 	res = sec_part_enter_user_mode(spc);
 	if (!res)
 		param->u[1].val.a = spc->regs.x[1];
+
+	memcpy((void *)ns_buf_base, (void *)(spc->ns_comm_buf_addr),
+	       ns_buf_size);
 
 	/*
 	 * Clear out the parameter mappings added with tee_mmu_map_param()

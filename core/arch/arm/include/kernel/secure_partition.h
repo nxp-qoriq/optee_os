@@ -108,6 +108,9 @@ struct secure_partition_boot_info {
 struct sec_part_ctx {
 	struct user_mode_ctx uctx;
 	struct thread_ctx_regs regs;
+	vaddr_t ns_comm_buf_addr;
+	unsigned int ns_comm_buf_size;
+	bool is_initializing;
 };
 
 extern const struct tee_ta_ops secure_partition_ops;
