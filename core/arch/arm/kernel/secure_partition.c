@@ -38,6 +38,8 @@ static struct sec_part_ctx *sec_part_alloc_ctx(const TEE_UUID *uuid)
 
 	spc->uctx.ctx.ops = &secure_partition_ops;
 	spc->uctx.ctx.uuid = *uuid;
+	spc->uctx.ctx.flags = TA_FLAG_SINGLE_INSTANCE |
+				TA_FLAG_INSTANCE_KEEP_ALIVE;
 
 	res = vm_info_init(&spc->uctx);
 	if (res)
