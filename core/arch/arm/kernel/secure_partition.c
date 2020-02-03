@@ -19,7 +19,7 @@ static const TEE_UUID stmm_uuid = PTA_STMM_UUID;
 
 static const unsigned int stmm_entry;
 static const unsigned int stmm_stack_size = 4 * SMALL_PAGE_SIZE;
-static const unsigned int stmm_heap_size = 200 * SMALL_PAGE_SIZE;
+static const unsigned int stmm_heap_size = 398 * SMALL_PAGE_SIZE;
 static const unsigned int stmm_sec_buf_size = SMALL_PAGE_SIZE;
 static const unsigned int stmm_ns_comm_buf_size = SMALL_PAGE_SIZE;
 
