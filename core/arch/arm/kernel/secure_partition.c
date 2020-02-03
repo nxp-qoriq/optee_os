@@ -116,6 +116,27 @@ static TEE_Result alloc_and_map_sp_fobj(struct sec_part_ctx *spc, size_t sz,
 	return res;
 }
 
+static TEE_Result alloc_and_map_io(struct sec_part_ctx *spc, paddr_t pa,
+				   size_t sz, uint32_t prot, vaddr_t *va, \
+				   size_t pad_begin, size_t pad_end)
+{
+	struct mobj *mobj;
+	TEE_Result res = TEE_SUCCESS;
+
+	sz = ROUNDUP(sz, SMALL_PAGE_SIZE);
+	mobj = mobj_phys_alloc(pa, sz, TEE_MATTR_CACHE_NONCACHE,
+			       CORE_MEM_TA_RAM);
+	if (!mobj)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	res = vm_map_pad(&spc->uctx, va, sz, prot, 0, mobj, 0, pad_begin,
+			 pad_end);
+	if (res)
+		mobj_put(mobj);
+
+	return res;
+}
+
 static void *zalloc(void *opaque __unused, unsigned int items,
 		    unsigned int size)
 {
