@@ -11,9 +11,13 @@
 #include <mm/tee_mmu.h>
 #include <pta_stmm.h>
 #include <tee/tee_svc.h>
+#include <tee/tee_pobj.h>
 #include <zlib.h>
 
 #include "thread_private.h"
+#include <tee/tee_svc_storage.h>
+#include <crypto/crypto.h>
+#include <tee_api_defines_extensions.h>
 
 static const TEE_UUID stmm_uuid = PTA_STMM_UUID;
 
@@ -489,8 +493,164 @@ static void set_svc_retval(struct thread_svc_regs *regs, uint64_t ret_val)
 }
 #endif /*ARM64*/
 
+/*
+ * Combined read from secure partition, this will open, read and
+ * close the fh
+ */
+static TEE_Result sec_storage_obj_read(unsigned long storage_id, void *obj_id,
+				       size_t obj_id_len, void *data,
+				       size_t len, size_t offset,
+				       unsigned long flags)
+
+{
+	const struct tee_file_operations *fops;
+	TEE_Result res = TEE_ERROR_BAD_STATE;
+	struct tee_ta_session *sess = NULL;
+	struct tee_file_handle *fh = NULL;
+	struct sec_part_ctx *spc = NULL;
+	struct tee_pobj *po = NULL;
+	size_t file_size = 0;
+	size_t read_len = 0;
+	size_t tmp = 0;
+
+	fops = tee_svc_storage_file_ops(storage_id);
+	if (!fops)
+		return TEE_ERROR_ITEM_NOT_FOUND;
+
+	if (obj_id_len > TEE_OBJECT_ID_MAX_LEN)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	res = tee_ta_get_current_session(&sess);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	spc = to_sec_part_ctx(sess->ctx);
+	res = tee_mmu_check_access_rights(&spc->uctx,
+					  TEE_MEMORY_ACCESS_WRITE |
+					  TEE_MEMORY_ACCESS_ANY_OWNER,
+					  (uaddr_t)data, len);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	res = tee_pobj_get((void *)&sess->ctx->uuid, obj_id,
+			   obj_id_len, flags, false, fops, &po);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	if (ADD_OVERFLOW(offset, len, &tmp)) {
+		res = TEE_ERROR_OVERFLOW;
+		goto release;
+	}
+
+	res = po->fops->open(po, &file_size, &fh);
+	if (res != TEE_SUCCESS)
+		goto release;
+
+	if (tmp > file_size) {
+		res = TEE_ERROR_CORRUPT_OBJECT;
+		goto err;
+	}
+
+	read_len = len;
+	res = po->fops->read(fh, offset, data, &read_len);
+	if (res != TEE_SUCCESS) {
+		if (res == TEE_ERROR_CORRUPT_OBJECT) {
+			EMSG("Object corrupt");
+			po->fops->remove(po);
+		}
+		goto err;
+	}
+
+	/* make sure we read the entire requested length */
+	if (len != read_len) {
+		res = TEE_ERROR_CORRUPT_OBJECT;
+		goto err;
+	}
+
+err:
+	po->fops->close(&fh);
+release:
+	tee_pobj_release(po);
+
+	return res;
+}
+
+/*
+ * Combined write from secure partition, this will create/open, write and
+ * close the fh
+ */
+static TEE_Result sec_storage_obj_write(unsigned long storage_id,
+					void *obj_id, size_t obj_id_len,
+					void *data, size_t len, size_t offset,
+					unsigned long flags)
+
+{
+	const struct tee_file_operations *fops;
+	struct tee_ta_session *sess = NULL;
+	struct tee_file_handle *fh = NULL;
+	struct sec_part_ctx *spc = NULL;
+	TEE_Result res = TEE_SUCCESS;
+	struct tee_pobj *po = NULL;
+	size_t tmp = 0;
+
+	fops = tee_svc_storage_file_ops(storage_id);
+	if (!fops)
+		return TEE_ERROR_ITEM_NOT_FOUND;
+
+	if (obj_id_len > TEE_OBJECT_ID_MAX_LEN)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	res = tee_ta_get_current_session(&sess);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	spc = to_sec_part_ctx(sess->ctx);
+	res = tee_mmu_check_access_rights(&spc->uctx,
+					  TEE_MEMORY_ACCESS_READ |
+					  TEE_MEMORY_ACCESS_ANY_OWNER,
+					  (uaddr_t)data, len);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	res = tee_pobj_get((void *)&sess->ctx->uuid, obj_id,
+			   obj_id_len, flags, false, fops, &po);
+	if (res != TEE_SUCCESS)
+		return res;
+
+	res = po->fops->open(po, NULL, &fh);
+	if (res == TEE_ERROR_ITEM_NOT_FOUND) {
+		res = po->fops->create(po, false, NULL, 0, NULL, 0, NULL, 0,
+				       &fh);
+		if (res != TEE_SUCCESS)
+			goto release;
+	}
+
+	if (ADD_OVERFLOW(offset, len, &tmp)) {
+		res = TEE_ERROR_OVERFLOW;
+		goto err;
+	}
+
+	res = po->fops->write(fh, offset, data, len);
+	if (res != TEE_SUCCESS)
+		goto err;
+
+err:
+	po->fops->close(&fh);
+release:
+	tee_pobj_release(po);
+
+	return res;
+}
+
+
 static bool stmm_handle_svc(struct thread_svc_regs *regs)
 {
+	uint32_t flags = TEE_DATA_FLAG_ACCESS_READ |
+		TEE_DATA_FLAG_ACCESS_WRITE |
+		TEE_DATA_FLAG_SHARE_READ |
+		TEE_DATA_FLAG_SHARE_WRITE;
+	TEE_Result res = TEE_SUCCESS;
+
 	switch (regs->x0) {
 	case SP_SVC_VERSION:
 		set_svc_retval(regs, SP_VERSION);
@@ -505,6 +665,22 @@ static bool stmm_handle_svc(struct thread_svc_regs *regs)
 		set_svc_retval(regs,
 			       sp_svc_set_mem_attr(regs->x1, regs->x2,
 						   regs->x3));
+		return true;
+	case SP_SVC_RPMB_READ:
+		res = sec_storage_obj_read(TEE_STORAGE_PRIVATE_RPMB,
+					   (void*)regs->x1, regs->x2,
+					   (void*)regs->x3, regs->x4,
+					   regs->x5, flags);
+		set_svc_retval(regs, res);
+
+		return true;
+	case SP_SVC_RPMB_WRITE:
+		res = sec_storage_obj_write(TEE_STORAGE_PRIVATE_RPMB,
+					    (void*)regs->x1, regs->x2,
+					    (void*)regs->x3, regs->x4, regs->x5,
+					    flags);
+		set_svc_retval(regs, res);
+
 		return true;
 	default:
 		EMSG("Undefined syscall 0x%"PRIx32, (uint32_t)regs->x0);
