@@ -141,6 +141,31 @@ static TEE_Result alloc_and_map_io(struct sec_part_ctx *spc, paddr_t pa,
 	return res;
 }
 
+/* FIXME HACK. This does not belong here. EDK2 with patchable pcd's could send
+ * a specific SVC and map the console. The use the remapped address for printing
+ * This ideally has to be defined in the platform port files and have a callback
+ * here
+ */
+/* UEFI identify mapping. Since the EDK PL01 drivers doesn't remap
+ * anything, map the address here and copy it before compiling EDK2. This will
+ * allow StMM debug messages for initial development...
+ */
+static TEE_Result alloc_nxp_io(struct sec_part_ctx *spc)
+{
+ 	TEE_Result res;
+ 	vaddr_t uart_va = 0;
+	res = alloc_and_map_io(spc, 0x021C0000, 0x00001000,
+ 			       TEE_MATTR_URW | TEE_MATTR_PRW,
+ 			       &uart_va, 0, 0);
+ 	if (res) {
+ 		EMSG("failed to alloc_and_map uart");
+ 		return res;
+ 	}
+	EMSG("uart va=%#"PRIxVA, uart_va);
+
+	return res;
+}
+
 static void *zalloc(void *opaque __unused, unsigned int items,
 		    unsigned int size)
 {
@@ -201,6 +226,9 @@ static TEE_Result load_stmm(struct sec_part_ctx *spc)
 				    &ns_comm_buf_addr);
 	if (res)
 		return res;
+
+	res = alloc_nxp_io(spc);
+ 	assert (res == TEE_SUCCESS);
 
 	image_addr = sp_addr;
 	heap_addr = image_addr +
