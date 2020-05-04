@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2019, Linaro Limited
+ * Copyright 2020 NXP
  */
 
 #include <kernel/abort.h>
@@ -153,7 +154,7 @@ static TEE_Result alloc_and_map_io(struct sec_part_ctx *spc, paddr_t pa,
 static TEE_Result alloc_nxp_io(struct sec_part_ctx *spc)
 {
  	TEE_Result res;
- 	vaddr_t uart_va = 0;
+	vaddr_t uart_va = 0, i2c5_va = 0;
 	res = alloc_and_map_io(spc, 0x021C0000, 0x00001000,
  			       TEE_MATTR_URW | TEE_MATTR_PRW,
  			       &uart_va, 0, 0);
@@ -161,7 +162,18 @@ static TEE_Result alloc_nxp_io(struct sec_part_ctx *spc)
  		EMSG("failed to alloc_and_map uart");
  		return res;
  	}
-	EMSG("uart va=%#"PRIxVA, uart_va);
+
+	/* Map I2c5 */
+	res = alloc_and_map_io(spc, 0x02040000, 0x00001000,
+			       TEE_MATTR_URW | TEE_MATTR_PRW,
+			       &i2c5_va, 0, 0);
+	if (res) {
+		EMSG("failed to alloc_and_map i2c5");
+		return res;
+	}
+
+	DMSG("uart va=%#"PRIxVA, uart_va);
+	DMSG("i2c5 va=%#"PRIxVA, i2c5_va);
 
 	return res;
 }
