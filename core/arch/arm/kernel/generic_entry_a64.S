@@ -206,7 +206,6 @@ clear_nex_bss:
 	 * they have turned on their D-cache, clean and invalidate the
 	 * D-cache before exiting to normal world.
 	 */
-	mov	x19, x0
 	adr_l	x0, __text_start
 	ldr	x1, cached_mem_end
 	sub	x1, x1, x0
@@ -228,12 +227,13 @@ clear_nex_bss:
 	 * called with MMU off.
 	 */
 	ldr	x0, boot_mmu_config + CORE_MMU_CONFIG_LOAD_OFFSET
-	sub	x1, x19, x0
+	adr	x1, thread_vector_table
+	sub	x1, x1, x0
 	mov	x0, #TEESMC_OPTEED_RETURN_ENTRY_DONE
 	smc	#0
 	b	.	/* SMC should not return */
 END_FUNC _start
-KEEP_INIT _start
+DECLARE_KEEP_INIT _start
 
 	.balign	8
 LOCAL_DATA cached_mem_end , :
@@ -396,7 +396,7 @@ FUNC cpu_on_handler , :
 	mov	x30, x21
 	b	generic_boot_cpu_on_handler
 END_FUNC cpu_on_handler
-KEEP_PAGER cpu_on_handler
+DECLARE_KEEP_PAGER cpu_on_handler
 
 LOCAL_FUNC unhandled_cpu , :
 	wfi

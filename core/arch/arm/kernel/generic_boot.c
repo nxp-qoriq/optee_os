@@ -31,6 +31,7 @@
 #include <trace.h>
 #include <utee_defines.h>
 #include <util.h>
+#include <kernel/tpm.h>
 
 #include <platform_config.h>
 
@@ -72,7 +73,7 @@ static uint32_t spin_table[CFG_TEE_CORE_NB_CORE];
  * When 1, it has started
  */
 uint32_t sem_cpu_sync[CFG_TEE_CORE_NB_CORE];
-KEEP_PAGER(sem_cpu_sync);
+DECLARE_KEEP_PAGER(sem_cpu_sync);
 #endif
 
 #ifdef CFG_DT
@@ -92,7 +93,7 @@ static uint32_t cntfrq;
 __weak void plat_primary_init_early(void)
 {
 }
-KEEP_PAGER(plat_primary_init_early);
+DECLARE_KEEP_PAGER(plat_primary_init_early);
 
 /* May be overridden in plat-$(PLATFORM)/main.c */
 __weak void main_init_gic(void)
@@ -1137,8 +1138,8 @@ void init_tee_runtime(void)
 		panic();
 }
 
-static void init_primary_helper(unsigned long pageable_part,
-				unsigned long nsec_entry, unsigned long fdt)
+static void generic_init_primary(unsigned long pageable_part,
+				 unsigned long nsec_entry)
 {
 	/*
 	 * Mask asynchronous exceptions before switch to the thread vector
@@ -1158,7 +1159,16 @@ static void init_primary_helper(unsigned long pageable_part,
 	thread_init_primary(generic_boot_get_handlers());
 	thread_init_per_cpu();
 	init_sec_mon(nsec_entry);
+}
+
+/*
+ * Note: this function is weak just to make it possible to exclude it from
+ * the unpaged area.
+ */
+void __weak paged_init_primary(unsigned long fdt)
+{
 	init_external_dt(fdt);
+	tpm_map_log_area(get_external_dt());
 	discover_nsec_memory();
 	update_external_dt();
 	configure_console_from_dt();
@@ -1183,7 +1193,7 @@ static void init_primary_helper(unsigned long pageable_part,
 }
 
 /* What this function is using is needed each time another CPU is started */
-KEEP_PAGER(generic_boot_get_handlers);
+DECLARE_KEEP_PAGER(generic_boot_get_handlers);
 
 static void init_secondary_helper(unsigned long nsec_entry)
 {
@@ -1206,15 +1216,25 @@ static void init_secondary_helper(unsigned long nsec_entry)
 	DMSG("Secondary CPU Switching to normal world boot");
 }
 
-#if defined(CFG_WITH_ARM_TRUSTED_FW)
-struct thread_vector_table *
-generic_boot_init_primary(unsigned long pageable_part, unsigned long u __unused,
-			  unsigned long fdt)
+/*
+ * Note: this function is weak just to make it possible to exclude it from
+ * the unpaged area so that it lies in the init area.
+ */
+void __weak generic_boot_init_primary(unsigned long pageable_part,
+				      unsigned long nsec_entry __maybe_unused,
+				      unsigned long fdt)
 {
-	init_primary_helper(pageable_part, PADDR_INVALID, fdt);
-	return &thread_vector_table;
+	unsigned long e = PADDR_INVALID;
+
+#if !defined(CFG_WITH_ARM_TRUSTED_FW)
+	e = nsec_entry;
+#endif
+
+	generic_init_primary(pageable_part, e);
+	paged_init_primary(fdt);
 }
 
+#if defined(CFG_WITH_ARM_TRUSTED_FW)
 unsigned long generic_boot_cpu_on_handler(unsigned long a0 __maybe_unused,
 				     unsigned long a1 __unused)
 {
@@ -1223,12 +1243,6 @@ unsigned long generic_boot_cpu_on_handler(unsigned long a0 __maybe_unused,
 	return 0;
 }
 #else
-void generic_boot_init_primary(unsigned long pageable_part,
-			       unsigned long nsec_entry, unsigned long fdt)
-{
-	init_primary_helper(pageable_part, nsec_entry, fdt);
-}
-
 void generic_boot_init_secondary(unsigned long nsec_entry)
 {
 	init_secondary_helper(nsec_entry);
