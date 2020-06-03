@@ -31,6 +31,6 @@ srcs-$(CFG_BCM_HWRNG) += bcm_hwrng.c
 srcs-$(CFG_BCM_SOTP) += bcm_sotp.c
 srcs-$(CFG_BCM_GPIO) += bcm_gpio.c
 srcs-$(CFG_NXP_GPIO) += nxp_gpio.c
-
+srcs-$(CFG_NXP_GPIO_TEST) += nxp_gpio_test.c
 subdirs-y += crypto
 subdirs-$(CFG_BNXT_FW) += bnxt
