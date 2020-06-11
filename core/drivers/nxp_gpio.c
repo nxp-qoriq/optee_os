@@ -136,7 +136,7 @@ static TEE_Result get_base_address_from_device_tree(paddr_t *base_addr)
 		}
 
 		size = _fdt_reg_size(fdt, gpio_offset);
-		if (!size) {
+		if (size < 0) {
 			EMSG("Unable to get size of physical base address from device tree");
 			return TEE_ERROR_ITEM_NOT_FOUND;
 		}
