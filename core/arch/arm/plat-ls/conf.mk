@@ -98,6 +98,8 @@ $(call force,CFG_PL011,y)
 $(call force,CFG_CORE_ARM64_PA_BITS,48)
 $(call force,CFG_NXP_GPIO,y)
 $(call force,CFG_NXP_GPIO_TEST,y)
+$(call force,CFG_NXP_DSPI,y)
+$(call force,CFG_NXP_DSPI_TEST,y)
 CFG_SHMEM_SIZE ?= 0x00200000
 endif
 
