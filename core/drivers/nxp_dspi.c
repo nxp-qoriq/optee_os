@@ -431,6 +431,9 @@ static TEE_Result layerscape_dspi_init(void)
 	/* generic DSPI chip handle */
 	dspi_data->chip.ops = &nxp_dspi_ops;
 
+#ifdef CFG_NXP_DSPI_TEST
+	dspi_test();
+#endif
 	return TEE_SUCCESS;
 }
 

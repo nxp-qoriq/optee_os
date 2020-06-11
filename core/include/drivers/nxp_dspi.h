@@ -178,3 +178,4 @@ struct nxp_dspi_data {
 	unsigned int		ctar_val[FSL_DSPI_MAX_CHIPSELECT];
 };
 
+void dspi_test(void);
