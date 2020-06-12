@@ -2,7 +2,7 @@
 /*
  * Copyright 2020 NXP
  *
- * DSPI Controller
+ * Helper Code for DSPI Controller driver
  */
 
 #include <spi.h>
@@ -50,62 +50,25 @@
 #define DSPI_TCR_SPI_TCNT(x)	(((x) & 0x0000FFFF) << 16)
 
 /* Clock and transfer attributes */
-#define DSPI_CTAR_DBR		0x80000000		//Double Baud Rate [0]
+#define DSPI_CTAR_BRD		0x80000000		//Double Baud Rate [0]
 #define DSPI_CTAR_FMSZ(x)	(((x) & 0x0F) << 27)	//Frame Size [1-4]
 #define DSPI_CTAR_CPOL		0x04000000		//Clock Polarity [5]
 #define DSPI_CTAR_CPHA		0x02000000		//Clock Phase [6]
 #define DSPI_CTAR_LSBFE		0x01000000		//LSB First [7]
-#define DSPI_CTAR_PCSSCK(x)	(((x) & 0x03) << 22)	//PCS to SCK Delay Prescaler [8-9]
-#define DSPI_CTAR_PCSSCK_7CLK	0x00A00000
-#define DSPI_CTAR_PCSSCK_5CLK	0x00800000
-#define DSPI_CTAR_PCSSCK_3CLK	0x00400000
-#define DSPI_CTAR_PCSSCK_1CLK	0x00000000
-#define DSPI_CTAR_PASC(x)	(((x) & 0x03) << 20)	//After SCK Delay Prescaler [10-11]
-#define DSPI_CTAR_PASC_7CLK	0x00300000
-#define DSPI_CTAR_PASC_5CLK	0x00200000
-#define DSPI_CTAR_PASC_3CLK	0x00100000
-#define DSPI_CTAR_PASC_1CLK	0x00000000
-#define DSPI_CTAR_PDT(x)	(((x) & 0x03) << 18)	//Delay after Transfer Prescaler [12-13]
-#define DSPI_CTAR_PDT_7CLK	0x000A0000
-#define DSPI_CTAR_PDT_5CLK	0x00080000
-#define DSPI_CTAR_PDT_3CLK	0x00040000
-#define DSPI_CTAR_PDT_1CLK	0x00000000
-#define DSPI_CTAR_PBR(x)	(((x) & 0x03) << 16)	//Baud Rate Prescaler [14-15]
-#define DSPI_CTAR_PBR_7CLK	0x00030000
-#define DSPI_CTAR_PBR_5CLK	0x00020000
-#define DSPI_CTAR_PBR_3CLK	0x00010000
-#define DSPI_CTAR_PBR_1CLK	0x00000000
-#define DSPI_CTAR_CSSCK(x)	(((x) & 0x0F) << 12)	//PCS to SCK Delay Scaler [16-19]
-#define DSPI_CTAR_ASC(x)	(((x) & 0x0F) << 8)	//After SCK Delay Scaler [20-23]
-#define DSPI_CTAR_DT(x)		(((x) & 0x0F) << 4)	//Delay After Transfer Scaler [24-27]
+#define DSPI_CTAR_BRP(x)	(((x) & 0x03) << 16)	//Baud Rate Prescaler [14-15]
 #define DSPI_CTAR_BR(x)		((x) & 0x0F)		//Baud Rate Scaler [28-31]
+#define DSPI_CTAR_PCS_SCK(x)	(((x) & 0x03) << 22)
+#define DSPI_CTAR_PA_SCK(x)	(((x) & 0x03) << 20)
+#define DSPI_CTAR_P_DT(x)	(((x) & 0x03) << 18)
+#define DSPI_CTAR_CS_SCK(x)	(((x) & 0x0F) << 12)
+#define DSPI_CTAR_A_DT(x)	(((x) & 0x0F) << 4)
+#define DSPI_CTAR_A_SCK(x)	(((x) & 0x0F) << 8)
+#define DSPI_CTAR_PCS_SCK_1CLK	0x00000000
 
 /* Status */
-#define DSPI_SR_TCF		0x80000000		//Transfer Complete Flag [0]
 #define DSPI_SR_TXRXS		0x40000000		//TX and RX Status [1]
-#define DSPI_SR_EOQF		0x10000000		//End of Queue Flag [3]
-#define DSPI_SR_TFFF		0x02000000		//Transmit FIFO Fill Flag [6]
-#define DSPI_SR_BSYF		0x01000000		//Busy Flag [7]
-#define DSPI_SR_CMDTCF		0x00800000		//Command Transfer Complete Flag [8]
-#define DSPI_SR_SPEF		0x00200000		//SPI Parity Error Flag [10]
-#define DSPI_SR_RFOF		0x00080000		//Receive FIFO Overflow Flag [12]
-#define DSPI_SR_TFIWF		0x00040000		//Transmit FIFO Invalid Write Flag [13]
-#define DSPI_SR_RFDF		0x00020000		//Receive FIFO Drain Flag [14]
-#define DSPI_SR_CMDFFF		0x00010000		//Command FIFO Fill Flag [15]
 #define DSPI_SR_TXCTR(x)	(((x) & 0x0000F000) >> 12)		//TX FIFO Counter [16-19]
-#define DSPI_SR_TXNXTPTR(x)	(((x) & 0x00000F00) >> 8)		//Transmit Next Pointer [20-23]
 #define DSPI_SR_RXCTR(x)	(((x) & 0x000000F0) >> 4)		//RX FIFO Counter [24-27]
-#define DSPI_SR_POPNXTPTR(x)	((x) & 0x0000000F)			//Pop Next Pointer [28-31]
-
-/* DMA/interrupt request select and enable */
-#define DSPI_RSER_TCF_RE	0x80000000		//Transmission Complete Request Enable [0]
-#define DSPI_RSER_CMDFFF_RE	0x40000000		//Command FIFO Fill Flag Request Enable [1]
-#define DSPI_RSER_EOQF_RE	0x10000000		//Finished Request Enable [3]
-#define DSPI_RSER_TFFF_RE	0x02000000		//Transmit FIFO Fill Request Enable [6]
-#define DSPI_RSER_TFFF_DIRS	0x01000000		//Transmit FIFO Fill DMA or Interrupt Request Select[7]
-#define DSPI_RSER_RFOF_RE	0x00080000		//Receive FIFO Overflow Request Enable [12]
-#define DSPI_RSER_RFDF_RE	0x00020000		//Receive FIFO Drain Request Enable [14]
-#define DSPI_RSER_RFDF_DIRS	0x00010000		//Receive FIFO Drain DMA or Interrupt Request Select [15]
 
 #define DSPI_DATA_8BIT		SHIFT_U32(8, 0)
 #define DSPI_DATA_16BIT		SHIFT_U32(0xF, 0)
@@ -125,21 +88,21 @@
 
 /* CTAR register pre-configure value */
 #define DSPI_CTAR_DEFAULT_VALUE		(DSPI_CTAR_FMSZ(7) | \
-					DSPI_CTAR_PCSSCK_1CLK | \
-					DSPI_CTAR_PASC(0) | \
-					DSPI_CTAR_PDT(0) | \
-					DSPI_CTAR_CSSCK(0) | \
-					DSPI_CTAR_ASC(0) | \
-					DSPI_CTAR_DT(0))
+					DSPI_CTAR_PCS_SCK_1CLK | \
+					DSPI_CTAR_PA_SCK(0) | \
+					DSPI_CTAR_P_DT(0) | \
+					DSPI_CTAR_CS_SCK(0) | \
+					DSPI_CTAR_A_SCK(0) | \
+					DSPI_CTAR_A_DT(0))
 
 /* CTAR register pre-configure mask */
 #define DSPI_CTAR_SET_MODE_MASK		(DSPI_CTAR_FMSZ(15) | \
-					DSPI_CTAR_PCSSCK(3) | \
-					DSPI_CTAR_PASC(3) | \
-					DSPI_CTAR_PDT(3) | \
-					DSPI_CTAR_CSSCK(15) | \
-					DSPI_CTAR_ASC(15) | \
-					DSPI_CTAR_DT(15))
+					DSPI_CTAR_PCS_SCK(3) | \
+					DSPI_CTAR_PA_SCK(3) | \
+					DSPI_CTAR_P_DT(3) | \
+					DSPI_CTAR_CS_SCK(15) | \
+					DSPI_CTAR_A_SCK(15) | \
+					DSPI_CTAR_A_DT(15))
 
 #define CONFIG_SYS_DSPI_CTAR0	1
 

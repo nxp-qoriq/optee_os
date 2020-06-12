@@ -71,7 +71,7 @@ static void dspi_setup_speed(unsigned int speed)
 			speed, bus_clock);
 
 	bus_setup = io_read32(dspi_data->base + DSPI_CTAR0);
-	bus_setup &= ~(DSPI_CTAR_DBR | DSPI_CTAR_PBR(0x3) | DSPI_CTAR_BR(0xf));
+	bus_setup &= ~(DSPI_CTAR_BRD | DSPI_CTAR_BRP(0x3) | DSPI_CTAR_BR(0xf));
 
 	status = dspi_convert_hz_to_baud(&req_i, &req_j, speed, bus_clock);
 	if (status == TEE_ERROR_ITEM_NOT_FOUND) {
@@ -80,7 +80,7 @@ static void dspi_setup_speed(unsigned int speed)
 		dspi_convert_hz_to_baud(&req_i, &req_j, speed, bus_clock);
 	}
 
-	bus_setup |= (DSPI_CTAR_PBR(req_i) | DSPI_CTAR_BR(req_j));
+	bus_setup |= (DSPI_CTAR_BRP(req_i) | DSPI_CTAR_BR(req_j));
 	io_write32(dspi_data->base + DSPI_CTAR0, bus_setup);
 
 	dspi_data->speed_hz = speed;
@@ -405,10 +405,17 @@ static TEE_Result get_info_from_device_tree(void)
 	dspi_data->bus_clk_hz = DSPI_CLK;
 
 	bus_num = fdt_getprop(fdt, node, "bus-num", NULL);
-	chip_select_num = fdt_getprop(fdt, node, "spi-num-chipselects", NULL);
+	if (bus_num != NULL)
+		dspi_data->num_bus = (int)fdt32_to_cpu(*bus_num);
+	else
+		return TEE_ERROR_ITEM_NOT_FOUND;
 
-	dspi_data->num_bus = (int)fdt32_to_cpu(*bus_num);
-	dspi_data->num_chipselect = (int)fdt32_to_cpu(*chip_select_num);
+	chip_select_num = fdt_getprop(fdt, node, "spi-num-chipselects", NULL);
+	if (chip_select_num != NULL)
+		dspi_data->num_chipselect = (int)fdt32_to_cpu(*chip_select_num);
+	else
+		return TEE_ERROR_ITEM_NOT_FOUND;
+
 	dspi_data->speed_hz = DSPI_DEFAULT_SCK_FREQ;
 
 	return TEE_SUCCESS;
