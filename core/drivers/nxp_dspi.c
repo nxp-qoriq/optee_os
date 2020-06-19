@@ -87,15 +87,15 @@ static void dspi_setup_speed(unsigned int speed)
 }
 
 /* Transferred data to TX FIFO */
-static void dspi_tx(uint32_t ctrl, uint8_t data)
+static void dspi_tx(uint32_t ctrl, uint16_t data)
 {
 	int timeout = DSPI_TXRX_WAIT_TIMEOUT;
-	int counter = DSPI_SR_TXCTR(io_read32(dspi_data->base + DSPI_SR));
 	uint32_t dspi_val_addr = dspi_data->base + DSPI_PUSHR;
 	uint32_t dspi_val = ctrl | data;
 
 	/* wait for empty entries in TXFIFO or timeout */
-	while (counter >= 4 && timeout--)
+	while (DSPI_SR_TXCTR(io_read32(dspi_data->base + DSPI_SR)) >= 4 &&
+		timeout--)
 		udelay(1);
 
 	if (timeout >= 0)
@@ -108,18 +108,16 @@ static void dspi_tx(uint32_t ctrl, uint8_t data)
 static uint16_t dspi_rx(void)
 {
 	int timeout = DSPI_TXRX_WAIT_TIMEOUT;
-	int counter = DSPI_SR_RXCTR(io_read32(dspi_data->base + DSPI_SR));
 	uint32_t dspi_val_addr = dspi_data->base + DSPI_POPR;
-	uint32_t dspi_val;
 
 	/* wait for valid entries in RXFIFO or timeout */
-	while (counter == 0 && timeout--)
+	while (DSPI_SR_RXCTR(io_read32(dspi_data->base + DSPI_SR)) == 0 &&
+		timeout--)
 		udelay(1);
 
-	if (timeout >= 0) {
-		dspi_val = io_read32(dspi_val_addr);
-		return (uint16_t)DSPI_RFR_RXDATA(dspi_val);
-	} else {
+	if (timeout >= 0)
+		return (uint16_t)DSPI_RFR_RXDATA(io_read32(dspi_val_addr));
+	else {
 		EMSG("dspi_rx: waiting timeout!\n");
 		return (uint16_t)(~0);
 	}
@@ -128,19 +126,23 @@ static uint16_t dspi_rx(void)
 static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 		uint8_t *rdata, size_t num_pkts)
 {
-	size_t i = 0;
-	size_t j = 0;
+	uint8_t *spi_rd = NULL, *spi_wr = NULL;
 	static uint32_t ctrl;
+
+	spi_wr = wdata;
+	spi_rd = rdata;
 
 	struct nxp_dspi_data *data = container_of(chip, struct nxp_dspi_data,
 			chip);
+	unsigned int cs = data->slave_cs;
 
 	/*
+	* Assert PCSn signals between transfers
 	* select which CTAR register and slave to be used for TX
 	* CTAS selects which CTAR to be used, here we are using CTAR0
 	* PCS (peripheral chip select) is selecting the slave.
 	*/
-	ctrl = ctrl | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(data->slave_cs);
+	ctrl = ctrl | (DSPI_TFR_CONT | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(cs));
 
 	if (data->slave_data_size_bits != 8) {
 		EMSG("data_size_bits should be 8, not %u",
@@ -148,25 +150,26 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 		return SPI_ERR_CFG;
 	}
 
-	if (wdata) {
-		while (i < num_pkts) {
-			dspi_tx(ctrl, wdata[i++]);	/* tx 1 packet */
-			if (rdata)
-				rdata[j++] = dspi_rx();	/* rx 1 packet */
+	while (num_pkts) {
+		if ((wdata != NULL) && (rdata != NULL)) {
+			dspi_tx(ctrl, *spi_wr++);
+			*spi_rd++ = dspi_rx();
+		} else if (wdata != NULL) {
+			dspi_tx(ctrl, *spi_wr++);
+			dspi_rx();
+		} else if (rdata != NULL) {
+			dspi_tx(ctrl, DSPI_IDLE_DATA);
+			*spi_rd++ = dspi_rx();
 		}
+		num_pkts = num_pkts - 1;
 	}
 
-	/* Capture remaining rdata not read above */
-	if (rdata) {
-		while (j < num_pkts) {
-			rdata[j++] = dspi_rx();	/* rx 1 packet */
-		}
-		if (j < num_pkts) {
-			EMSG("Packets requested %zu, received %zu",
-					num_pkts, j);
-			return SPI_ERR_PKTCNT;
-		}
-	}
+	/* De-assert PCSn signals between transfers */
+	ctrl = ctrl & ~DSPI_TFR_CONT;
+
+	/* dummy read */
+	dspi_tx(ctrl, DSPI_IDLE_DATA);
+	dspi_rx();
 
 	return SPI_OK;
 }
@@ -174,19 +177,23 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 		uint16_t *rdata, size_t num_pkts)
 {
-	size_t i = 0;
-	size_t j = 0;
 	static uint32_t ctrl;
+	uint16_t *spi_rd = NULL, *spi_wr = NULL;
+
+	spi_wr = wdata;
+	spi_rd = rdata;
 
 	struct nxp_dspi_data *data = container_of(chip, struct nxp_dspi_data,
 			chip);
+	unsigned int cs = data->slave_cs;
 
 	/*
+	* Assert PCSn signals between transfers
 	* select which CTAR register and slave to be used for TX
 	* CTAS selects which CTAR to be used, here we are using CTAR0
 	* PCS (peripheral chip select) is selecting the slave.
 	*/
-	ctrl = ctrl | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(data->slave_cs);
+	ctrl = ctrl | (DSPI_TFR_CONT | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(cs));
 
 	if (data->slave_data_size_bits != 16) {
 		EMSG("data_size_bits should be 16, not %u",
@@ -194,25 +201,26 @@ static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 		return SPI_ERR_CFG;
 	}
 
-	if (wdata) {
-		while (i < num_pkts) {
-			dspi_tx(ctrl, wdata[i++]);	/* tx 1 packet */
-			if (rdata)
-				rdata[j++] = dspi_rx();	/* rx 1 packet */
+	while (num_pkts) {
+		if ((wdata != NULL) && (rdata != NULL)) {
+			dspi_tx(ctrl, *spi_wr++);
+			*spi_rd++ = dspi_rx();
+		} else if (wdata != NULL) {
+			dspi_tx(ctrl, *spi_wr++);
+			dspi_rx();
+		} else if (rdata != NULL) {
+			dspi_tx(ctrl, DSPI_IDLE_DATA);
+			*spi_rd++ = dspi_rx();
 		}
+		num_pkts = num_pkts - 1;
 	}
 
-	/* Capture remaining rdata not read above */
-	if (rdata) {
-		while (j < num_pkts) {
-			rdata[j++] = dspi_rx();	/* rx 1 packet */
-		}
-		if (j < num_pkts) {
-			EMSG("Packets requested %zu, received %zu",
-					num_pkts, j);
-			return SPI_ERR_PKTCNT;
-		}
-	}
+	/* De-assert PCSn signals between transfers */
+	ctrl = ctrl & ~DSPI_TFR_CONT;
+
+	/* dummy read */
+	dspi_tx(ctrl, DSPI_IDLE_DATA);
+	dspi_rx();
 
 	return SPI_OK;
 }
@@ -287,10 +295,6 @@ static void dspi_set_transfer_state(unsigned int cs, unsigned int state)
 		bus_setup |= DSPI_CTAR_LSBFE;
 
 	io_write32(dspi_data->base + DSPI_CTAR0, bus_setup);
-
-	dspi_data->slave_data_size_bits =
-		((io_read32(dspi_data->base + DSPI_CTAR0) &
-		  DSPI_CTAR_FMSZ(15)) == DSPI_CTAR_FMSZ(15)) ? 16 : 8;
 }
 
 static void dspi_set_speed(unsigned int speed_max_hz)

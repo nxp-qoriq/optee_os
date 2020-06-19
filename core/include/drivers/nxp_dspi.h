@@ -76,15 +76,16 @@
 #define DSPI_TFR_CONT		(0x80000000)
 #define DSPI_TFR_CTAS(x)	(((x)&0x07)<<12)
 #define DSPI_TFR_PCS(x)		(((1 << x) & 0x0000003f) << 16)
+#define DSPI_IDLE_DATA		0x0
 
 /* tx/rx data wait timeout value, unit: us */
 #define DSPI_TXRX_WAIT_TIMEOUT	1000000
 
 /* Transfer Fifo */
-#define DSPI_TFR_TXDATA(x)	(((x)&0xFFFF))
+#define DSPI_TFR_TXDATA(x)	(((x) & 0x0000FFFF))
 
 /* Bit definitions and macros for DRFR */
-#define DSPI_RFR_RXDATA(x)	(((x)&0xFFFF))
+#define DSPI_RFR_RXDATA(x)	(((x) & 0x0000FFFF))
 
 /* CTAR register pre-configure value */
 #define DSPI_CTAR_DEFAULT_VALUE		(DSPI_CTAR_FMSZ(7) | \
