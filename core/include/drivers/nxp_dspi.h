@@ -144,4 +144,5 @@ struct nxp_dspi_data {
 };
 
 TEE_Result nxp_dspi_init(struct nxp_dspi_data *dspi_data);
+void dspi_flush_fifo(struct nxp_dspi_data *dspi_data);
 void dspi_test(void);

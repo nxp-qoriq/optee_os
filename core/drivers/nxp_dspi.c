@@ -251,7 +251,7 @@ static void nxp_dspi_end(struct spi_chip *chip)
 	io_write32(data->base + DSPI_MCR, mcr_val);
 }
 
-static void dspi_flush_fifo(struct nxp_dspi_data *dspi_data)
+void dspi_flush_fifo(struct nxp_dspi_data *dspi_data)
 {
 	unsigned int mcr_val = 0;
 
