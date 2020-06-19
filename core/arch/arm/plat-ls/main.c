@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
- * Copyright 2018 NXP
+ * Copyright 2018-2020 NXP
  * Copyright (C) 2015 Freescale Semiconductor, Inc.
  * All rights reserved.
  *
@@ -50,6 +50,7 @@
 #include <tee/entry_std.h>
 #include <kernel/tee_common_otp.h>
 #include <mm/core_mmu.h>
+#include <drivers/nxp_dspi.h>
 
 static const struct thread_handlers handlers = {
 #if defined(CFG_WITH_ARM_TRUSTED_FW)
@@ -166,6 +167,16 @@ void main_secondary_init_gic(void)
 {
 	gic_cpu_init(&gic_data);
 }
+
+static TEE_Result peripherals_init(void)
+{
+#ifdef CFG_NXP_DSPI_TEST
+	dspi_test();
+#endif
+	return TEE_SUCCESS;
+}
+
+driver_init(peripherals_init);
 
 #ifdef CFG_HW_UNQ_KEY_REQUEST
 

@@ -6,6 +6,7 @@
  */
 
 #include <spi.h>
+#include <mm/core_memprot.h>
 
 /* SPI register offset */
 #define DSPI_MCR		0x0	//Module Configuration Register
@@ -142,4 +143,5 @@ struct nxp_dspi_data {
 	unsigned int		ctar_val[FSL_DSPI_MAX_CHIPSELECT];
 };
 
+TEE_Result nxp_dspi_init(struct nxp_dspi_data *dspi_data);
 void dspi_test(void);

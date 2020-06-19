@@ -19,8 +19,6 @@
 #include <libfdt.h>
 #endif
 
-struct nxp_dspi_data *dspi_data;
-
 /*
  * Calculate the divide scaler value between expected SCK frequency
  * and input clk frequency
@@ -59,7 +57,8 @@ static TEE_Result dspi_convert_hz_to_baud(unsigned int *req_pbr,
 }
 
 /* setup speed for slave */
-static void dspi_setup_speed(unsigned int speed)
+static void dspi_setup_speed(struct nxp_dspi_data *dspi_data,
+		unsigned int speed)
 {
 	TEE_Result status = TEE_ERROR_GENERIC;
 	unsigned int bus_setup, bus_clock;
@@ -87,7 +86,8 @@ static void dspi_setup_speed(unsigned int speed)
 }
 
 /* Transferred data to TX FIFO */
-static void dspi_tx(uint32_t ctrl, uint16_t data)
+static void dspi_tx(struct nxp_dspi_data *dspi_data, uint32_t ctrl,
+		uint16_t data)
 {
 	int timeout = DSPI_TXRX_WAIT_TIMEOUT;
 	uint32_t dspi_val_addr = dspi_data->base + DSPI_PUSHR;
@@ -105,7 +105,7 @@ static void dspi_tx(uint32_t ctrl, uint16_t data)
 }
 
 /* Read data from RX FIFO */
-static uint16_t dspi_rx(void)
+static uint16_t dspi_rx(struct nxp_dspi_data *dspi_data)
 {
 	int timeout = DSPI_TXRX_WAIT_TIMEOUT;
 	uint32_t dspi_val_addr = dspi_data->base + DSPI_POPR;
@@ -152,14 +152,14 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 
 	while (num_pkts) {
 		if ((wdata != NULL) && (rdata != NULL)) {
-			dspi_tx(ctrl, *spi_wr++);
-			*spi_rd++ = dspi_rx();
+			dspi_tx(data, ctrl, *spi_wr++);
+			*spi_rd++ = dspi_rx(data);
 		} else if (wdata != NULL) {
-			dspi_tx(ctrl, *spi_wr++);
-			dspi_rx();
+			dspi_tx(data, ctrl, *spi_wr++);
+			dspi_rx(data);
 		} else if (rdata != NULL) {
-			dspi_tx(ctrl, DSPI_IDLE_DATA);
-			*spi_rd++ = dspi_rx();
+			dspi_tx(data, ctrl, DSPI_IDLE_DATA);
+			*spi_rd++ = dspi_rx(data);
 		}
 		num_pkts = num_pkts - 1;
 	}
@@ -168,8 +168,8 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 	ctrl = ctrl & ~DSPI_TFR_CONT;
 
 	/* dummy read */
-	dspi_tx(ctrl, DSPI_IDLE_DATA);
-	dspi_rx();
+	dspi_tx(data, ctrl, DSPI_IDLE_DATA);
+	dspi_rx(data);
 
 	return SPI_OK;
 }
@@ -203,14 +203,14 @@ static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 
 	while (num_pkts) {
 		if ((wdata != NULL) && (rdata != NULL)) {
-			dspi_tx(ctrl, *spi_wr++);
-			*spi_rd++ = dspi_rx();
+			dspi_tx(data, ctrl, *spi_wr++);
+			*spi_rd++ = dspi_rx(data);
 		} else if (wdata != NULL) {
-			dspi_tx(ctrl, *spi_wr++);
-			dspi_rx();
+			dspi_tx(data, ctrl, *spi_wr++);
+			dspi_rx(data);
 		} else if (rdata != NULL) {
-			dspi_tx(ctrl, DSPI_IDLE_DATA);
-			*spi_rd++ = dspi_rx();
+			dspi_tx(data, ctrl, DSPI_IDLE_DATA);
+			*spi_rd++ = dspi_rx(data);
 		}
 		num_pkts = num_pkts - 1;
 	}
@@ -219,35 +219,39 @@ static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 	ctrl = ctrl & ~DSPI_TFR_CONT;
 
 	/* dummy read */
-	dspi_tx(ctrl, DSPI_IDLE_DATA);
-	dspi_rx();
+	dspi_tx(data, ctrl, DSPI_IDLE_DATA);
+	dspi_rx(data);
 
 	return SPI_OK;
 }
 
-static void nxp_dspi_start(struct spi_chip *chip __unused)
+static void nxp_dspi_start(struct spi_chip *chip)
 {
 	unsigned int mcr_val = 0;
+	struct nxp_dspi_data *data = container_of(chip, struct nxp_dspi_data,
+		chip);
 
-	mcr_val  = io_read32(dspi_data->base + DSPI_MCR);
+	mcr_val  = io_read32(data->base + DSPI_MCR);
 	mcr_val &= ~DSPI_MCR_HALT;
 
 	EMSG("Start DSPI Module");
-	io_write32(dspi_data->base + DSPI_MCR, mcr_val);
+	io_write32(data->base + DSPI_MCR, mcr_val);
 }
 
-static void nxp_dspi_end(struct spi_chip *chip __unused)
+static void nxp_dspi_end(struct spi_chip *chip)
 {
 	unsigned int mcr_val = 0;
+	struct nxp_dspi_data *data = container_of(chip, struct nxp_dspi_data,
+		chip);
 
-	mcr_val  = io_read32(dspi_data->base + DSPI_MCR);
+	mcr_val  = io_read32(data->base + DSPI_MCR);
 	mcr_val |= DSPI_MCR_HALT;
 
 	EMSG("Stop DSPI Module");
-	io_write32(dspi_data->base + DSPI_MCR, mcr_val);
+	io_write32(data->base + DSPI_MCR, mcr_val);
 }
 
-static void dspi_flush_fifo(void)
+static void dspi_flush_fifo(struct nxp_dspi_data *dspi_data)
 {
 	unsigned int mcr_val = 0;
 
@@ -259,7 +263,8 @@ static void dspi_flush_fifo(void)
 	io_write32(dspi_data->base + DSPI_MCR, mcr_val);
 }
 
-static void dspi_set_cs_active_state(unsigned int cs, unsigned int state)
+static void dspi_set_cs_active_state(struct nxp_dspi_data *dspi_data,
+		unsigned int cs, unsigned int state)
 {
 	EMSG("Set CS active state");
 	unsigned int mcr_val = 0;
@@ -276,7 +281,8 @@ static void dspi_set_cs_active_state(unsigned int cs, unsigned int state)
 	io_setbits32(dspi_data->base + DSPI_MCR, mcr_val);
 }
 
-static void dspi_set_transfer_state(unsigned int cs, unsigned int state)
+static void dspi_set_transfer_state(struct nxp_dspi_data *dspi_data,
+		unsigned int cs, unsigned int state)
 {
 	EMSG("Set transfer state");
 	unsigned int bus_setup = 0;
@@ -297,13 +303,15 @@ static void dspi_set_transfer_state(unsigned int cs, unsigned int state)
 	io_write32(dspi_data->base + DSPI_CTAR0, bus_setup);
 }
 
-static void dspi_set_speed(unsigned int speed_max_hz)
+static void dspi_set_speed(struct nxp_dspi_data *dspi_data,
+		unsigned int speed_max_hz)
 {
 	EMSG("Set speed");
-	dspi_setup_speed(speed_max_hz);
+	dspi_setup_speed(dspi_data, speed_max_hz);
 }
 
-static void dspi_config_slave_state(unsigned int bus __unused, unsigned int cs,
+static void dspi_config_slave_state(struct nxp_dspi_data *dspi_data,
+		unsigned int bus __unused, unsigned int cs,
 		unsigned int speed_max_hz, unsigned int state)
 {
 	unsigned int sr_val = 0;
@@ -314,16 +322,16 @@ static void dspi_config_slave_state(unsigned int bus __unused, unsigned int cs,
 		dspi_data->ctar_val[i] = DSPI_CTAR_DEFAULT_VALUE;
 
 	/* configure speed */
-	dspi_set_speed(speed_max_hz);
+	dspi_set_speed(dspi_data, speed_max_hz);
 
 	/* configure transfer state */
-	dspi_set_transfer_state(cs, state);
+	dspi_set_transfer_state(dspi_data, cs, state);
 
 	/* configure active state of CSX */
-	dspi_set_cs_active_state(cs, state);
+	dspi_set_cs_active_state(dspi_data, cs, state);
 
 	/* clear FIFO*/
-	dspi_flush_fifo();
+	dspi_flush_fifo(dspi_data);
 
 	/* check module TX and RX status */
 	sr_val = io_read32(dspi_data->base + DSPI_SR);
@@ -332,7 +340,8 @@ static void dspi_config_slave_state(unsigned int bus __unused, unsigned int cs,
 	}
 }
 
-static void dspi_set_master_state(unsigned int mcr_val)
+static void dspi_set_master_state(struct nxp_dspi_data *dspi_data,
+		unsigned int mcr_val)
 {
 	EMSG("Set master state");
 	io_write32(dspi_data->base + DSPI_MCR, mcr_val);
@@ -348,14 +357,14 @@ static void nxp_dspi_configure(struct spi_chip *chip)
 		DSPI_MCR_CRXF | DSPI_MCR_CTXF;
 
 	/* Configure Master */
-	dspi_set_master_state(mcr_cfg_val);
+	dspi_set_master_state(data, mcr_cfg_val);
 
 	/* Configure DSPI slave */
-	dspi_config_slave_state(data->slave_bus, data->slave_cs,
+	dspi_config_slave_state(data, data->slave_bus, data->slave_cs,
 			data->slave_speed_max_hz, data->slave_mode);
 }
 
-static TEE_Result get_info_from_device_tree(void)
+static TEE_Result get_info_from_device_tree(struct nxp_dspi_data *dspi_data)
 {
 	const fdt32_t *bus_num = NULL;
 	const fdt32_t *chip_select_num = NULL;
@@ -435,52 +444,24 @@ static const struct spi_ops nxp_dspi_ops = {
 DECLARE_KEEP_PAGER(nxp_dspi_ops);
 
 /*
- * Register NXP-Layerscape DSPI controller
- */
-static TEE_Result layerscape_dspi_init(void)
-{
-	/* generic DSPI chip handle */
-	dspi_data->chip.ops = &nxp_dspi_ops;
-
-#ifdef CFG_NXP_DSPI_TEST
-	dspi_test();
-#endif
-	return TEE_SUCCESS;
-}
-
-/*
  * Initialise NXP DSPI controller
  */
-static TEE_Result nxp_dspi_init(void)
+TEE_Result nxp_dspi_init(struct nxp_dspi_data *dspi_data)
 {
 	TEE_Result status = TEE_ERROR_GENERIC;
-
-	/* allocate memory for DSPI */
-	dspi_data = (struct nxp_dspi_data *)malloc(sizeof(
-				struct nxp_dspi_data));
-
-	if (dspi_data == NULL) {
-		EMSG("Unable to init DSPI");
-		return TEE_ERROR_OUT_OF_MEMORY;
-	}
 
 	/*
 	 * First get the DSPI Controller base address from the DTB,
 	 * if DTB present and if the DSPI Controller defined in it.
 	 */
-	status = get_info_from_device_tree();
+	status = get_info_from_device_tree(dspi_data);
 
 	/* Register DSPI Controller */
 	if (status == TEE_SUCCESS)
-		status = layerscape_dspi_init();
-	else {
+		/* generic DSPI chip handle */
+		dspi_data->chip.ops = &nxp_dspi_ops;
+	else
 		EMSG("Unable to get info from device tree");
-		/* free allocated memorry for DSPI*/
-		free(dspi_data);
-	}
 
 	return status;
 }
-
-/* Initialise DSPI driver */
-driver_init(nxp_dspi_init);

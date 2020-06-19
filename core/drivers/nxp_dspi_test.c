@@ -9,9 +9,7 @@
 #include <mm/core_memprot.h>
 #include <stdint.h>
 
-extern struct nxp_dspi_data *dspi_data;
-
-/* testing configuration for DSPI3 controller
+/* Testing configuration for DSPI3 controller
  * Use FPGA configuration using i2c for board configuration
  *
  * Enable below configuration in RCW file as per DSPI to be used
@@ -24,49 +22,56 @@ extern struct nxp_dspi_data *dspi_data;
  * SDHC1_DIR_PMUX=3
  * SDHC1_DS_PMUX=2
  */
-static void dspi_test_suite(void)
+static TEE_Result dspi_test_suite(void)
 {
-	struct nxp_dspi_data *data = dspi_data;
+	struct nxp_dspi_data dspi_data;
+	TEE_Result status = TEE_ERROR_GENERIC;
 
 	EMSG("DSPI TEST Starts");
 
-	uint8_t tx[3] = {0x01, 0x80, 0x04};	/* TX array values */
-	uint8_t rx[3] = {0};	/* RX array to be read */
-	size_t i, j, len = 3;	/* length of data to be TX */
+	uint8_t tx[4] = {0xff, 0x22, 0x33, 0x44};	/* TX array values */
+	uint8_t rx[4] = {0};	/* RX array to be read */
+	size_t i, j, len = 4;	/* length of data to be TX */
 	enum spi_result res;
 
-	DMSG("dspi_base: 0x%lx\n", data->base);
-
 	/* set slave info */
-	data->slave_bus		= 3;
-	data->slave_cs		= 1;
-	data->slave_speed_max_hz = 1000000;
-	data->slave_mode	= 3;
-	data->slave_data_size_bits = 8;
+	dspi_data.slave_bus		= 3;
+	dspi_data.slave_cs		= 0;
+	dspi_data.slave_speed_max_hz = 1000000;
+	dspi_data.slave_mode	= 3;
+	dspi_data.slave_data_size_bits = 8;
 
-	data->chip.ops->end(&data->chip);	/* stop DSPI controller */
-	data->chip.ops->configure(&data->chip);		/* configure DSPI chip instance */
-	data->chip.ops->start(&data->chip);	/* start DSPI controller */
+	/* Initialise DSPI driver */
+	status = nxp_dspi_init(&dspi_data);
 
-	for (j = 0; j < 1; j++) {
-		EMSG("DSPI test loop: %zu", j);
-		/* start TX/RX */
-		res = data->chip.ops->txrx8(&data->chip, tx, rx, len);
-		if (res) {
-			EMSG("DSPI transceive error %d", res);
-			break;
+	if (status == TEE_SUCCESS) {
+
+		DMSG("DSPI Base: 0x%lx\n", dspi_data.base);
+		dspi_data.chip.ops->end(&dspi_data.chip);	/* stop DSPI controller */
+		dspi_data.chip.ops->configure(&dspi_data.chip);		/* configure DSPI chip instance */
+		dspi_data.chip.ops->start(&dspi_data.chip);	/* start DSPI controller */
+
+		for (j = 0; j < 1; j++) {
+			EMSG("DSPI test loop: %zu", j);
+			/* start TX/RX */
+			res = dspi_data.chip.ops->txrx8(&dspi_data.chip, tx, rx, len);
+			if (res) {
+				EMSG("DSPI transceive error %d", res);
+				break;
+			}
+			for (i = 0; i < len; i++)
+				EMSG("rx[%zu] = 0x%x", i, rx[i]);
+
+			tee_time_busy_wait(20);
 		}
-		for (i = 0; i < len; i++)
-			EMSG("rx[%zu] = 0x%x", i, rx[i]);
+		dspi_data.chip.ops->end(&dspi_data.chip);	/* stop DSPI controller */
+	} else
+		EMSG("Unable to init DSPI driver");
 
-		tee_time_busy_wait(20);
-	}
-	data->chip.ops->end(&data->chip);	/* stop DSPI controller */
+	return status;
 }
 
 /*
- * nxp_dspi_init() MUST be run before calling this function!
- *
  * Verify read/write path of DSPI module by writing/reading on flash connected
  * to dSPI controller so the DSPI module will just receive
  * what is transmitted, i.e. 0x01, 0x80, 0x04.
@@ -74,5 +79,11 @@ static void dspi_test_suite(void)
  */
 void dspi_test(void)
 {
-	dspi_test_suite();
+	TEE_Result status = TEE_ERROR_GENERIC;
+
+	status = dspi_test_suite();
+	if (status == TEE_SUCCESS)
+		EMSG("Test passed");
+	else
+		EMSG("Test failed");
 }
