@@ -108,8 +108,6 @@
 #define GIC_BASE			0x06000000
 #define GICC_OFFSET			0x0
 #define GICD_OFFSET			0x0
-#define GPIO1_BASE			0x2300000
-#define DSPI_BASE			0x2120000	/* DSPI3 controller offset*/
 #endif
 
 #endif /*PLATFORM_CONFIG_H*/
