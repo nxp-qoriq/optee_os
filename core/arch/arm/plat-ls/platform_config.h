@@ -104,12 +104,10 @@
 
 #if defined(PLATFORM_FLAVOR_lx2160aqds)
 /*  DUART 1 */
+/*  This UART0_BASE is needed for early console initialization
+ *  because till that time, fdt code doesnot comes into picture
+ */
 #define UART0_BASE			0x021C0000
-#define GIC_BASE			0x06000000
-#define GICC_OFFSET			0x0
-#define GICD_OFFSET			0x0
-#define GPIO1_BASE			0x2300000
-#define DSPI_BASE			0x2120000	/* DSPI3 controller offset*/
 #endif
 
 #endif /*PLATFORM_CONFIG_H*/
