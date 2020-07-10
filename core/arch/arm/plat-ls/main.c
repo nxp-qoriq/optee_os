@@ -51,6 +51,7 @@
 #include <kernel/tee_common_otp.h>
 #include <mm/core_mmu.h>
 #include <drivers/nxp_dspi.h>
+#include <drivers/nxp_ls_i2c.h>
 #include <kernel/dt.h>
 
 #ifdef CFG_DT
@@ -85,7 +86,7 @@ static struct ns16550_data console_data;
 register_phys_mem_pgdir(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE,
 			CORE_MMU_PGDIR_SIZE);
 
-#if !defined(PLATFORM_FLAVOR_lx2160aqds) && !defined(CFG_DT)
+#if !defined(PLATFORM_FLAVOR_lx2160aqds)
 register_phys_mem_pgdir(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_PGDIR_SIZE);
 #endif
 
@@ -238,6 +239,9 @@ static TEE_Result peripherals_init(void)
 {
 #ifdef CFG_NXP_DSPI_TEST
 	dspi_test();
+#endif
+#ifdef CFG_NXP_I2C_TEST
+	i2c_test();
 #endif
 	return TEE_SUCCESS;
 }
