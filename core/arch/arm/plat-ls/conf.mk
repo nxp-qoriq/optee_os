@@ -100,6 +100,8 @@ $(call force,CFG_NXP_GPIO,y)
 $(call force,CFG_NXP_GPIO_TEST,n)
 $(call force,CFG_NXP_DSPI,y)
 $(call force,CFG_NXP_DSPI_TEST,n)
+$(call force,CFG_NXP_LS_I2C,y)
+$(call force,CFG_NXP_I2C_TEST,n)
 CFG_SHMEM_SIZE ?= 0x00200000
 endif
 
@@ -114,6 +116,8 @@ $(call force,CFG_CORE_CLUSTER_SHIFT,1)
 $(call force,CFG_ARM_GICV3,y)
 $(call force,CFG_PL011,y)
 $(call force,CFG_CORE_ARM64_PA_BITS,48)
+$(call force,CFG_NXP_LS_I2C,y)
+$(call force,CFG_NXP_I2C_TEST,n)
 CFG_SHMEM_SIZE ?= 0x00200000
 endif
 
