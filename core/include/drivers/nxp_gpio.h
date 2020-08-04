@@ -8,8 +8,9 @@
 
 #include <gpio.h>
 #include <stdlib.h>
+#include <tee_api_types.h>
 
-/* supported ports for GPIO1 controller */
+/* supported ports for GPIO controller */
 #define MAX_GPIO_PINS		31
 
 /* map register values to LE by subtracting pin number from MAX GPIO PINS */
@@ -28,10 +29,13 @@
  * struct nxp_gpio_chip describes GPIO controller chip instance
  * @chip:       generic GPIO chip handle.
  * @gpio_base:  starting GPIO module base address managed by this GPIO controller.
+ * @gpio_controller: GPIO controller to be used
  */
 struct gpio_chip_data {
 	struct gpio_chip chip;
 	vaddr_t gpio_base;
+	uint8_t	gpio_controller;
 };
 
+TEE_Result nxp_gpio_init(struct gpio_chip_data *gpio_data);
 void gpio_test(void);

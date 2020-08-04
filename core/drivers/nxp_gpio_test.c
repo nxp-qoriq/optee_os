@@ -28,36 +28,51 @@ enum gpio_test_direction {
 int gpio_pin[] = {GPIO_PIN_31, GPIO_PIN_30};
 
 /* testing loopback mode of PIN 30 and PIN 31 */
-static void gpio_test_suite(void)
+static TEE_Result gpio_test_suite(void)
 {
-	struct gpio_chip_data *data = gc_data;
-	EMSG("TEST: GPIO1 controller base address: 0x%lx", data->gpio_base);
+	struct gpio_chip_data data;
+	TEE_Result status = TEE_ERROR_GENERIC;
+
+	EMSG("GPIO Test Starts");
+
+	/* set slave info */
+	data.gpio_controller = CFG_GPIO_CONTROLLER;
+
+	/* Initialise GPIO driver */
+	status = nxp_gpio_init(&data);
 
 	int len = ARRAY_LENGTH(gpio_pin);
 
-	for (int i = 0; i < len; i++) {
-		/* Set the GPIO pin direction as output */
-		data->chip.ops->set_direction(gpio_pin[i], GPIO_TEST_DIR_OUT);
-		EMSG("Get the direction of PIN %d as %d", gpio_pin[i], data->chip.ops->get_direction(gpio_pin[i]));
+	if (status == TEE_SUCCESS) {
+		DMSG("GPIO Base: 0x%lx\n", data.gpio_base);
 
-		/* Set the GPIO pin direction as input */
-		data->chip.ops->set_direction(gpio_pin[i^1], GPIO_TEST_DIR_IN);
-		EMSG("Get the direction of PIN %d as %d", gpio_pin[i^1], data->chip.ops->get_direction(gpio_pin[i^1]));
+		for (int i = 0; i < len; i++) {
+			/* Set the GPIO pin direction as output */
+			data.chip.ops->set_direction(&data.chip, gpio_pin[i], GPIO_TEST_DIR_OUT);
+			EMSG("Get the direction of PIN %d as %d", gpio_pin[i], data.chip.ops->get_direction(&data.chip, gpio_pin[i]));
 
-		/* If an output pin, write the level (low or high) */
-		data->chip.ops->set_value(gpio_pin[i], 1);
-		EMSG("Write value 1 on PIN %d", gpio_pin[i]);
+			/* Set the GPIO pin direction as input */
+			data.chip.ops->set_direction(&data.chip, gpio_pin[i^1], GPIO_TEST_DIR_IN);
+			EMSG("Get the direction of PIN %d as %d", gpio_pin[i^1], data.chip.ops->get_direction(&data.chip, gpio_pin[i^1]));
 
-		/* If an input pin, read the pin's level (low or high) */
-		EMSG("Read the value on PIN %d and read value: %d", gpio_pin[i], data->chip.ops->get_value(gpio_pin[i]));
-		EMSG("Read the value on PIN %d and read value: %d", gpio_pin[i^1], data->chip.ops->get_value(gpio_pin[i^1]));
+			/* If an output pin, write the level (low or high) */
+			data.chip.ops->set_value(&data.chip, gpio_pin[i], 1);
+			EMSG("Write value 1 on PIN %d", gpio_pin[i]);
 
-		/* check if values at both PINs (PIN 31 and PIN 30) are same or not */
-		if (data->chip.ops->get_value(gpio_pin[i]) == data->chip.ops->get_value(gpio_pin[i^1]))
-			EMSG("Test passed successfully.");
-		else
-			EMSG("Test failed.");
-	}
+			/* If an input pin, read the pin's level (low or high) */
+			EMSG("Read the value on PIN %d and read value: %d", gpio_pin[i], data.chip.ops->get_value(&data.chip, gpio_pin[i]));
+			EMSG("Read the value on PIN %d and read value: %d", gpio_pin[i^1], data.chip.ops->get_value(&data.chip, gpio_pin[i^1]));
+
+			/* check if values at both PINs (PIN 31 and PIN 30) are same or not */
+			if (data.chip.ops->get_value(&data.chip, gpio_pin[i]) == data.chip.ops->get_value(&data.chip, gpio_pin[i^1]))
+				EMSG("Test passed successfully.");
+			else
+				EMSG("Test failed.");
+		}
+	} else
+		EMSG("Unable to init GPIO driver");
+
+	return status;
 }
 
 /*
@@ -86,6 +101,12 @@ static void gpio_test_suite(void)
 
 void gpio_test(void)
 {
-	EMSG("GPIO TEST STARTS");
-	gpio_test_suite();
+	TEE_Result status = TEE_ERROR_GENERIC;
+
+	status = gpio_test_suite();
+	if (status == TEE_SUCCESS)
+		EMSG("Test passed");
+	else
+		EMSG("Test failed");
+
 }

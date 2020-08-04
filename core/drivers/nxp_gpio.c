@@ -17,13 +17,25 @@
 #include <libfdt.h>
 #endif
 
-/* global data pointer for gpio */
-struct gpio_chip_data *gc_data;
+#define        GPIO_CTRL_PATH  18
+#define        GPIO_CTRL_NUM   4
 
-static enum gpio_level gpio_get_value(unsigned int gpio_pin)
+typedef struct _gpio_controlle_path {
+       char path[GPIO_CTRL_PATH];
+} gpio_controller_path;
+
+static const gpio_controller_path gpio_controller_map[GPIO_CTRL_NUM] = {
+       {"/soc/gpio@2300000"},  {"/soc/gpio@2310000"},  {"/soc/gpio@2320000"},
+       {"/soc/gpio@2330000"}
+       };
+
+static enum gpio_level gpio_get_value(struct gpio_chip *chip,
+		unsigned int gpio_pin)
 {
 	vaddr_t gpio_data_addr;
 	uint32_t data;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -36,10 +48,13 @@ static enum gpio_level gpio_get_value(unsigned int gpio_pin)
 		return GPIO_LEVEL_LOW;
 }
 
-static void gpio_set_value(unsigned int gpio_pin, enum gpio_level value)
+static void gpio_set_value(struct gpio_chip *chip, unsigned int gpio_pin,
+		enum gpio_level value)
 {
 	vaddr_t gpio_data_addr;
 	uint32_t data;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -54,10 +69,13 @@ static void gpio_set_value(unsigned int gpio_pin, enum gpio_level value)
 		io_setbits32(gpio_data_addr, (data & ~(PIN_SHIFT(gpio_pin))));
 }
 
-static enum gpio_dir gpio_get_direction(unsigned int gpio_pin)
+static enum gpio_dir gpio_get_direction(struct gpio_chip *chip,
+		unsigned int gpio_pin)
 {
 	vaddr_t gpio_dir_addr;
 	uint32_t data;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -70,9 +88,12 @@ static enum gpio_dir gpio_get_direction(unsigned int gpio_pin)
 		return !GPIO_DIR_IN;
 }
 
-static void gpio_set_direction(unsigned int gpio_pin, enum gpio_dir direction)
+static void gpio_set_direction(struct gpio_chip *chip, unsigned int gpio_pin,
+		enum gpio_dir direction)
 {
 	vaddr_t gpio_dir_addr;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -84,10 +105,13 @@ static void gpio_set_direction(unsigned int gpio_pin, enum gpio_dir direction)
 		io_clrbits32(gpio_dir_addr, PIN_SHIFT(gpio_pin));
 }
 
-static enum gpio_interrupt gpio_get_interrupt(unsigned int gpio_pin)
+static enum gpio_interrupt gpio_get_interrupt(struct gpio_chip *chip,
+		unsigned int gpio_pin)
 {
 	vaddr_t gpio_ier_addr;
 	uint32_t data;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -100,10 +124,12 @@ static enum gpio_interrupt gpio_get_interrupt(unsigned int gpio_pin)
 		return GPIO_INTERRUPT_DISABLE;
 }
 
-static void gpio_set_interrupt(unsigned int gpio_pin,
+static void gpio_set_interrupt(struct gpio_chip *chip, unsigned int gpio_pin,
 				enum gpio_interrupt interrupt)
 {
 	vaddr_t gpio_ier_addr;
+	struct gpio_chip_data *gc_data = container_of(chip,
+		struct gpio_chip_data, chip);
 
 	assert(gpio_pin <= MAX_GPIO_PINS);
 
@@ -115,18 +141,25 @@ static void gpio_set_interrupt(unsigned int gpio_pin,
 		io_clrbits32(gpio_ier_addr, PIN_SHIFT(gpio_pin));
 }
 
-static TEE_Result get_base_address_from_device_tree(paddr_t *base_addr)
+static TEE_Result get_info_from_device_tree(struct gpio_chip_data *gpio_data)
 {
 	paddr_t paddr = 0;
 	ssize_t size = 0;
+	int gpio_offset = 0;
+	vaddr_t ctrl_base;
+	char ctrl_path[GPIO_CTRL_PATH];
+
+	memset(ctrl_path, 0, GPIO_CTRL_PATH);
+	strncpy(ctrl_path, gpio_controller_map[gpio_data->gpio_controller].path,
+		GPIO_CTRL_PATH);
 
 	void *fdt = get_embedded_dt();
-	int gpio_offset = 0;
+	DMSG("GPIO controller path = %s\n", ctrl_path);
 
-	gpio_offset = fdt_path_offset(fdt, "/soc/gpio@2300000");
+	gpio_offset = fdt_path_offset(fdt, ctrl_path);
 
 	if (gpio_offset < 0)
-		gpio_offset = fdt_path_offset(fdt, "/gpio@2300000");
+		gpio_offset = fdt_path_offset(fdt, ctrl_path);
 
 	if (gpio_offset > 0) {
 		paddr = _fdt_reg_base_address(fdt, gpio_offset);
@@ -151,7 +184,16 @@ static TEE_Result get_base_address_from_device_tree(paddr_t *base_addr)
 		return TEE_ERROR_ITEM_NOT_FOUND;
 	}
 
-	*base_addr = paddr;
+	/* converting phyical address to virtual address */
+	ctrl_base = (vaddr_t)phys_to_virt(paddr, MEM_AREA_IO_NSEC);
+
+	if (ctrl_base > 0)
+		gpio_data->gpio_base = ctrl_base;
+	else {
+		EMSG("Unable to get virtual address from GPIO controller");
+		return TEE_ERROR_GENERIC;
+	}
+
 	return TEE_SUCCESS;
 }
 
@@ -165,68 +207,28 @@ static const struct gpio_ops nxp_gpio_ops = {
 };
 DECLARE_KEEP_PAGER(nxp_gpio_ops);
 
-/* Register NXP-Layerscape GPIO1 controller */
-static TEE_Result layerscape_gpio_init(paddr_t gpio_base_phy_addr)
-{
-	vaddr_t ctrl_base;
-
-	/* generic GPIO chip handle */
-	gc_data->chip.ops = &nxp_gpio_ops;
-
-	/* converting phyical address to virtual address */
-	ctrl_base = (vaddr_t)phys_to_virt(gpio_base_phy_addr,
-					MEM_AREA_IO_NSEC);
-	if (ctrl_base > 0)
-		gc_data->gpio_base = ctrl_base;
-	else {
-		EMSG("Unable to get virtual address of GPIO controller");
-		return TEE_ERROR_GENERIC;
-	}
-
-	/* set GPIO Input Buffer Enable register */
-	io_setbits32(gc_data->gpio_base + GPIOIBE, 0xffffffff);
-
-#ifdef CFG_NXP_GPIO_TEST
-	/* call GPIO test suite */
-	gpio_test();
-#endif
-	return TEE_SUCCESS;
-}
-
 /*
- * Initialise GPIO1 controller
+ * Initialise GPIO Controller
  */
-static TEE_Result nxp_gpio_init(void)
+TEE_Result nxp_gpio_init(struct gpio_chip_data *gpio_data)
 {
 	TEE_Result status = TEE_ERROR_GENERIC;
-	paddr_t gpio_base_phy_addr = 0;
-
-	/* allocate memory for GPIO */
-	gc_data = (struct gpio_chip_data *)malloc(sizeof(
-						struct gpio_chip_data));
-
-	if (gc_data == NULL) {
-		EMSG("Unable to init GPIO1 controller");
-		return TEE_ERROR_OUT_OF_MEMORY;
-	}
 
 	/*
-	 * First get the GPIO1 Controller base address from the DTB,
-	 * if DTB present and if the GPIO1 Controller defined in it.
+	 * First get the GPIO Controller base address from the DTB,
+	 * if DTB present and if the GPIO Controller defined in it.
 	 */
-	status = get_base_address_from_device_tree(&gpio_base_phy_addr);
+	status = get_info_from_device_tree(gpio_data);
 
-	/* register NXP-Layerscape GPIO1 controller  */
-	if (status == TEE_SUCCESS)
-		status = layerscape_gpio_init(gpio_base_phy_addr);
-	else {
-		EMSG("Unable to get physical address of GPIO1 controller");
-		/* free allocated memory for GPIO*/
-		free(gc_data);
-	}
+	/* register NXP-Layerscape GPIO controller  */
+	if (status == TEE_SUCCESS) {
+		/* set GPIO Input Buffer Enable register */
+		io_setbits32(gpio_data->gpio_base + GPIOIBE, 0xffffffff);
+
+		/* generic GPIO chip handle */
+		gpio_data->chip.ops = &nxp_gpio_ops;
+	} else
+		EMSG("Unable to get info from device tree");
 
 	return status;
 }
-
-/* Initialise gpio driver with GPIO1 controller*/
-driver_init(nxp_gpio_init);

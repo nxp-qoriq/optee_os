@@ -51,6 +51,7 @@
 #include <kernel/tee_common_otp.h>
 #include <mm/core_mmu.h>
 #include <drivers/nxp_dspi.h>
+#include <drivers/nxp_gpio.h>
 #include <drivers/nxp_ls_i2c.h>
 #include <kernel/dt.h>
 
@@ -237,6 +238,9 @@ void main_secondary_init_gic(void)
 
 static TEE_Result peripherals_init(void)
 {
+#ifdef CFG_NXP_GPIO_TEST
+	gpio_test();
+#endif
 #ifdef CFG_NXP_DSPI_TEST
 	dspi_test();
 #endif
