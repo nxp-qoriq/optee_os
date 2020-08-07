@@ -184,7 +184,7 @@ TEE_Result i2c_init(nxp_i2c_data *i2c_data)
 	 */
 	fdt = get_embedded_dt();
 
-	EMSG("I2C controller path = %s\n", ctrl_path);
+	DMSG("I2C controller path = %s\n", ctrl_path);
 	node = fdt_path_offset(fdt, ctrl_path);
 	if (node > 0) {
 		paddr = _fdt_reg_base_address(fdt, node);
