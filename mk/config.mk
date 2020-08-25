@@ -519,3 +519,12 @@ CFG_SHOW_CONF_ON_BOOT ?= n
 # to a TA, so a TPM Service could use it to extend any measurement
 # taken before the service was up and running.
 CFG_CORE_TPM_EVENT_LOG ?= n
+
+ifneq ($(CFG_STMM_PATH),)
+$(call force,CFG_WITH_SECURE_PARTITION,y)
+else
+CFG_WITH_SECURE_PARTITION ?= n
+endif
+ifeq ($(CFG_WITH_SECURE_PARTITION),y)
+$(call force,CFG_ZLIB,y)
+endif
