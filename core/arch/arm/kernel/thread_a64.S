@@ -69,6 +69,14 @@ FUNC thread_init_vbar , :
 END_FUNC thread_init_vbar
 DECLARE_KEEP_PAGER thread_init_vbar
 
+FUNC thread_get_cntkctl_el1 , :
+	mrs	x0, CNTKCTL_EL1
+	ret
+
+FUNC thread_set_cntkctl_el1 , :
+	msr	CNTKCTL_EL1, x0
+	ret
+
 /*
  * uint32_t __thread_enter_user_mode(struct thread_ctx_regs *regs,
  *				     uint32_t *exit_status0,

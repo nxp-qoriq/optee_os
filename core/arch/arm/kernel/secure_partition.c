@@ -68,9 +68,13 @@ static TEE_Result sec_part_enter_user_mode(struct sec_part_ctx *spc)
 	uint32_t exceptions = 0;
 	uint32_t panic_code = 0;
 	uint32_t panicked = 0;
+	uint64_t cntkctl;
 
 	exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+	cntkctl = thread_get_cntkctl_el1();
+	thread_set_cntkctl_el1(cntkctl | 0x3);
 	__thread_enter_user_mode(&spc->regs, &panicked, &panic_code);
+	thread_set_cntkctl_el1(cntkctl);
 	thread_unmask_exceptions(exceptions);
 
 	clear_vfp_state(spc);
