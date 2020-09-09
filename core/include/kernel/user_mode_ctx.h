@@ -9,11 +9,12 @@
 #include <assert.h>
 #include <kernel/user_mode_ctx_struct.h>
 #include <kernel/user_ta.h>
+#include <kernel/secure_partition.h>
 #include <stdbool.h>
 
 static inline bool is_user_mode_ctx(struct tee_ta_ctx *ctx)
 {
-	return is_user_ta_ctx(ctx);
+	return is_user_ta_ctx(ctx) || is_sp_ctx(ctx);
 }
 
 static inline struct user_mode_ctx *to_user_mode_ctx(struct tee_ta_ctx *ctx)

@@ -62,3 +62,12 @@ recipe-conf_str = scripts/bin_to_c.py --text --bin $(conf-mk-xz-base64) \
 			--out $(sub-dir-out)/conf.mk.xz.base64.c \
 			--vname conf_str
 endif
+
+ifneq ($(CFG_STMM_PATH),)
+gensrcs-y += stmm
+produce-stmm = stmm_hex.c
+depends-stmm = scripts/gen_stmm_hex.py $(CFG_STMM_PATH)
+recipe-stmm = scripts/gen_stmm_hex.py --input $(CFG_STMM_PATH) \
+			--output $(sub-dir-out)/stmm_hex.c
+cleanfiles += $(sub-dir-out)/stmm_hex.c
+endif

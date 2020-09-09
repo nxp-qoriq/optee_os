@@ -176,6 +176,12 @@ void thread_set_irq_sp(vaddr_t sp);
 void thread_set_fiq_sp(vaddr_t sp);
 #endif /*ARM32*/
 
+/* Returns EL0 timer access permission */
+uint64_t thread_get_cntkctl_el1(void);
+
+/* Sets EL0 timer access permission */
+void thread_set_cntkctl_el1(uint64_t val);
+
 /* Checks stack canaries */
 void thread_check_canaries(void);
 
