@@ -14,10 +14,13 @@
 #include <kernel/generic_boot.h>
 #include <mm/core_memprot.h>
 #include <kernel/delay.h>
+#include <util.h>
 
 #ifdef CFG_DT
 #include <libfdt.h>
 #endif
+
+#define NXP_DSPI_COMPATIBLE "fsl,lx2160a-dspi"
 
 /*
  * Calculate the divide scaler value between expected SCK frequency
@@ -66,7 +69,7 @@ static void dspi_setup_speed(struct nxp_dspi_data *dspi_data,
 
 	bus_clock = dspi_data->bus_clk_hz;
 
-	EMSG("DSPI set_speed: expected SCK speed %u, bus_clk %u.\n",
+	DMSG("DSPI set_speed: expected SCK speed %u, bus_clk %u.\n",
 			speed, bus_clock);
 
 	bus_setup = io_read32(dspi_data->base + DSPI_CTAR0);
@@ -127,7 +130,7 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 		uint8_t *rdata, size_t num_pkts)
 {
 	uint8_t *spi_rd = NULL, *spi_wr = NULL;
-	static uint32_t ctrl;
+	uint32_t ctrl;
 
 	spi_wr = wdata;
 	spi_rd = rdata;
@@ -142,7 +145,9 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 	* CTAS selects which CTAR to be used, here we are using CTAR0
 	* PCS (peripheral chip select) is selecting the slave.
 	*/
-	ctrl = ctrl | (DSPI_TFR_CONT | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(cs));
+	ctrl = DSPI_TFR_CTAS(data->ctar_sel) | DSPI_TFR_PCS(cs);
+	if (data->slave_mode & SPI_CONT)
+		ctrl |= DSPI_TFR_CONT;
 
 	if (data->slave_data_size_bits != 8) {
 		EMSG("data_size_bits should be 8, not %u",
@@ -164,20 +169,13 @@ static enum spi_result nxp_dspi_txrx8(struct spi_chip *chip, uint8_t *wdata,
 		num_pkts = num_pkts - 1;
 	}
 
-	/* De-assert PCSn signals between transfers */
-	ctrl = ctrl & ~DSPI_TFR_CONT;
-
-	/* dummy read */
-	dspi_tx(data, ctrl, DSPI_IDLE_DATA);
-	dspi_rx(data);
-
 	return SPI_OK;
 }
 
 static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 		uint16_t *rdata, size_t num_pkts)
 {
-	static uint32_t ctrl;
+	uint32_t ctrl;
 	uint16_t *spi_rd = NULL, *spi_wr = NULL;
 
 	spi_wr = wdata;
@@ -193,7 +191,9 @@ static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 	* CTAS selects which CTAR to be used, here we are using CTAR0
 	* PCS (peripheral chip select) is selecting the slave.
 	*/
-	ctrl = ctrl | (DSPI_TFR_CONT | DSPI_TFR_CTAS(0) | DSPI_TFR_PCS(cs));
+	ctrl = DSPI_TFR_CTAS(data->ctar_sel) | DSPI_TFR_PCS(cs);
+	if (data->slave_mode & SPI_CONT)
+		ctrl |= DSPI_TFR_CONT;
 
 	if (data->slave_data_size_bits != 16) {
 		EMSG("data_size_bits should be 16, not %u",
@@ -215,13 +215,6 @@ static enum spi_result nxp_dspi_txrx16(struct spi_chip *chip, uint16_t *wdata,
 		num_pkts = num_pkts - 1;
 	}
 
-	/* De-assert PCSn signals between transfers */
-	ctrl = ctrl & ~DSPI_TFR_CONT;
-
-	/* dummy read */
-	dspi_tx(data, ctrl, DSPI_IDLE_DATA);
-	dspi_rx(data);
-
 	return SPI_OK;
 }
 
@@ -234,7 +227,7 @@ static void nxp_dspi_start(struct spi_chip *chip)
 	mcr_val  = io_read32(data->base + DSPI_MCR);
 	mcr_val &= ~DSPI_MCR_HALT;
 
-	EMSG("Start DSPI Module");
+	DMSG("Start DSPI Module");
 	io_write32(data->base + DSPI_MCR, mcr_val);
 }
 
@@ -244,10 +237,21 @@ static void nxp_dspi_end(struct spi_chip *chip)
 	struct nxp_dspi_data *data = container_of(chip, struct nxp_dspi_data,
 		chip);
 
+	/* De-assert PCSn if in CONT mode */
+	if (data->slave_mode & SPI_CONT) {
+		unsigned int cs = data->slave_cs;
+		unsigned int ctrl = DSPI_TFR_CTAS(data->ctar_sel) |
+				    DSPI_TFR_PCS(cs);
+
+		/* Dummy read to deassert */
+		dspi_tx(data, ctrl, DSPI_IDLE_DATA);
+		dspi_rx(data);
+	}
+
 	mcr_val  = io_read32(data->base + DSPI_MCR);
 	mcr_val |= DSPI_MCR_HALT;
 
-	EMSG("Stop DSPI Module");
+	DMSG("Stop DSPI Module");
 	io_write32(data->base + DSPI_MCR, mcr_val);
 }
 
@@ -266,7 +270,7 @@ void dspi_flush_fifo(struct nxp_dspi_data *dspi_data)
 static void dspi_set_cs_active_state(struct nxp_dspi_data *dspi_data,
 		unsigned int cs, unsigned int state)
 {
-	EMSG("Set CS active state");
+	DMSG("Set CS active state cs=%d state=%d", cs, state);
 	unsigned int mcr_val = 0;
 
 	mcr_val = io_read32(dspi_data->base + DSPI_MCR);
@@ -282,15 +286,16 @@ static void dspi_set_cs_active_state(struct nxp_dspi_data *dspi_data,
 }
 
 static void dspi_set_transfer_state(struct nxp_dspi_data *dspi_data,
-		unsigned int cs, unsigned int state)
+				    unsigned int state)
 {
-	EMSG("Set transfer state");
+	DMSG("Set transfer state state=%d bits=%d", state,
+	     dspi_data->slave_data_size_bits);
 	unsigned int bus_setup = 0;
 
 	bus_setup = io_read32(dspi_data->base + DSPI_CTAR0);
 
 	bus_setup &= ~DSPI_CTAR_SET_MODE_MASK;
-	bus_setup |= dspi_data->ctar_val[cs];
+	bus_setup |= dspi_data->ctar_val;
 	bus_setup &= ~(DSPI_CTAR_CPOL | DSPI_CTAR_CPHA | DSPI_CTAR_LSBFE);
 
 	if (state & SPI_CPOL)
@@ -300,32 +305,35 @@ static void dspi_set_transfer_state(struct nxp_dspi_data *dspi_data,
 	if (state & SPI_LSB_FIRST)
 		bus_setup |= DSPI_CTAR_LSBFE;
 
-	io_write32(dspi_data->base + DSPI_CTAR0, bus_setup);
+	if (dspi_data->slave_data_size_bits == 8)
+		bus_setup |= DSPI_CTAR_FMSZ(7);
+	else if (dspi_data->slave_data_size_bits == 16)
+		bus_setup |= DSPI_CTAR_FMSZ(15);
+
+	if (dspi_data->ctar_sel == 0)
+		io_write32(dspi_data->base + DSPI_CTAR0, bus_setup);
+	else
+		io_write32(dspi_data->base + DSPI_CTAR1, bus_setup);
 }
 
 static void dspi_set_speed(struct nxp_dspi_data *dspi_data,
 		unsigned int speed_max_hz)
 {
-	EMSG("Set speed");
+	DMSG("Set speed %d", speed_max_hz);
 	dspi_setup_speed(dspi_data, speed_max_hz);
 }
 
 static void dspi_config_slave_state(struct nxp_dspi_data *dspi_data,
-		unsigned int bus __unused, unsigned int cs,
-		unsigned int speed_max_hz, unsigned int state)
+				    unsigned int cs, unsigned int speed_max_hz,
+				    unsigned int state)
 {
 	unsigned int sr_val = 0;
-	int i;
-
-	/* set default value in clock and transfer attributes register */
-	for (i = 0; i < FSL_DSPI_MAX_CHIPSELECT; i++)
-		dspi_data->ctar_val[i] = DSPI_CTAR_DEFAULT_VALUE;
 
 	/* configure speed */
 	dspi_set_speed(dspi_data, speed_max_hz);
 
 	/* configure transfer state */
-	dspi_set_transfer_state(dspi_data, cs, state);
+	dspi_set_transfer_state(dspi_data, state);
 
 	/* configure active state of CSX */
 	dspi_set_cs_active_state(dspi_data, cs, state);
@@ -343,7 +351,7 @@ static void dspi_config_slave_state(struct nxp_dspi_data *dspi_data,
 static void dspi_set_master_state(struct nxp_dspi_data *dspi_data,
 		unsigned int mcr_val)
 {
-	EMSG("Set master state");
+	DMSG("Set master state val=0x%x", mcr_val);
 	io_write32(dspi_data->base + DSPI_MCR, mcr_val);
 }
 
@@ -360,53 +368,46 @@ static void nxp_dspi_configure(struct spi_chip *chip)
 	dspi_set_master_state(data, mcr_cfg_val);
 
 	/* Configure DSPI slave */
-	dspi_config_slave_state(data, data->slave_bus, data->slave_cs,
-			data->slave_speed_max_hz, data->slave_mode);
+	dspi_config_slave_state(data, data->slave_cs, data->slave_speed_max_hz,
+				data->slave_mode);
 }
 
 static TEE_Result get_info_from_device_tree(struct nxp_dspi_data *dspi_data)
 {
 	const fdt32_t *bus_num = NULL;
 	const fdt32_t *chip_select_num = NULL;
-	paddr_t paddr = 0;
-	ssize_t size = 0;
+	size_t size = 0;
 	int node = 0;
-	vaddr_t ctrl_base;
+	vaddr_t ctrl_base = 0;
 
 	/*
 	 * First get the DSPI Controller base address from the DTB
 	 * if DTB present and if the DSPI Controller defined in it.
 	 */
-	void *fdt = get_embedded_dt();
-	node = fdt_path_offset(fdt, "/soc/spi@2120000");
+	void *fdt = get_dt();
 
-	if (node < 0)
-		node = fdt_path_offset(fdt, "/spi@2120000");
-	if (node > 0) {
-		paddr = _fdt_reg_base_address(fdt, node);
-		if (paddr == DT_INFO_INVALID_REG) {
-			EMSG("Unable to get physical base address from device tree");
-			return TEE_ERROR_ITEM_NOT_FOUND;
-		}
-
-		size = _fdt_reg_size(fdt, node);
-		if (size < 0) {
-			EMSG("Unable to get size of physical base address from device tree");
-			return TEE_ERROR_ITEM_NOT_FOUND;;
-		}
-	} else {
-		EMSG("Unable to get DSPI offset node");
+	if (fdt == NULL) {
+		EMSG("No Device Tree found");
 		return TEE_ERROR_ITEM_NOT_FOUND;
 	}
 
-	/* making entry in page table */
-	if (!core_mmu_add_mapping(MEM_AREA_IO_NSEC, paddr, size)) {
-		EMSG("DSPI control base MMU PA mapping failure");
-		return TEE_ERROR_ITEM_NOT_FOUND;
+	node = fdt_node_offset_by_compatible(fdt, 0, NXP_DSPI_COMPATIBLE);
+	while (node != -FDT_ERR_NOTFOUND) {
+		if (_fdt_get_status(fdt, node) & DT_STATUS_OK_SEC) {
+			bus_num = fdt_getprop(fdt, node, "bus-num", NULL);
+			if ((bus_num != NULL) && (dspi_data->slave_bus ==
+			    (unsigned int)fdt32_to_cpu(*bus_num))) {
+				if (dt_map_dev(fdt, node, &ctrl_base, &size) <
+				    0) {
+					EMSG("Unable to get virtual address from DSPI controller");
+					return TEE_ERROR_GENERIC;
+				}
+				break;
+			}
+		}
+		node = fdt_node_offset_by_compatible(fdt, node,
+						     NXP_DSPI_COMPATIBLE);
 	}
-
-	/* converting phyical address to virtual address */
-	ctrl_base = (vaddr_t)phys_to_virt(paddr, MEM_AREA_IO_NSEC);
 
 	if (ctrl_base > 0)
 		dspi_data->base = ctrl_base;
@@ -416,12 +417,6 @@ static TEE_Result get_info_from_device_tree(struct nxp_dspi_data *dspi_data)
 	}
 
 	dspi_data->bus_clk_hz = DSPI_CLK;
-
-	bus_num = fdt_getprop(fdt, node, "bus-num", NULL);
-	if (bus_num != NULL)
-		dspi_data->num_bus = (int)fdt32_to_cpu(*bus_num);
-	else
-		return TEE_ERROR_ITEM_NOT_FOUND;
 
 	chip_select_num = fdt_getprop(fdt, node, "spi-num-chipselects", NULL);
 	if (chip_select_num != NULL)
