@@ -99,11 +99,11 @@ $(call force,CFG_CORE_ARM64_PA_BITS,48)
 $(call force,CFG_EMBED_DT,y)
 $(call force,CFG_EMBED_DTB_SOURCE_FILE,fsl-lx2160a-qds.dts)
 $(call force,CFG_NXP_GPIO,y)
-$(call force,CFG_NXP_GPIO_TEST,n)
 $(call force,CFG_NXP_DSPI,y)
-$(call force,CFG_NXP_DSPI_TEST,n)
 $(call force,CFG_NXP_LS_I2C,y)
-$(call force,CFG_NXP_I2C_TEST,n)
+CFG_NXP_I2C_TEST ?= n
+CFG_NXP_DSPI_TEST ?= n
+CFG_NXP_GPIO_TEST ?= n
 CFG_SHMEM_SIZE ?= 0x00200000
 endif
 
@@ -121,7 +121,7 @@ $(call force,CFG_CORE_ARM64_PA_BITS,48)
 $(call force,CFG_EMBED_DT,y)
 $(call force,CFG_EMBED_DTB_SOURCE_FILE,fsl-lx2160a-rdb.dts)
 $(call force,CFG_NXP_LS_I2C,y)
-$(call force,CFG_NXP_I2C_TEST,n)
+CFG_NXP_I2C_TEST ?= n
 CFG_SHMEM_SIZE ?= 0x00200000
 endif
 
