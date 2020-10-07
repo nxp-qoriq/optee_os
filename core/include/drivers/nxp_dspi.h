@@ -123,7 +123,7 @@
 /* default SCK frequency, unit: HZ */
 #define PLATFORM_CLK		650000000
 #define DSPI_DEFAULT_SCK_FREQ	10000000
-#define DSPI_CLK_DIV		2	/* prescaler divisor*/
+#define DSPI_CLK_DIV		4	/* prescaler divisor*/
 #define DSPI_CLK		(PLATFORM_CLK/DSPI_CLK_DIV)	/* DSPI clock*/
 #define CS_SPEED_MAX_HZ		1000000	/* Slave max speed*/
 
