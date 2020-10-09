@@ -9,6 +9,14 @@
 #include <mm/core_memprot.h>
 #include <stdint.h>
 
+/* CTAR register pre-configure value */
+#define DSPI_CTAR_DEFAULT_VALUE	(DSPI_CTAR_FMSZ(7) | \
+				DSPI_CTAR_PA_SCK(0) | \
+				DSPI_CTAR_P_DT(0) | \
+				DSPI_CTAR_CS_SCK(0) | \
+				DSPI_CTAR_A_SCK(0) | \
+				DSPI_CTAR_A_DT(0))
+
 /* Testing configuration for DSPI3 controller
  * Use FPGA configuration using i2c for board configuration
  *
@@ -29,24 +37,26 @@ static TEE_Result dspi_test_suite(void)
 
 	EMSG("DSPI TEST Starts");
 
-	uint8_t tx[4] = {0xff, 0x22, 0x33, 0x44};	/* TX array values */
+	uint8_t tx[4] = {0xff, 0x22, 0x33, 0x44};	/* TX array value */
 	uint8_t rx[4] = {0};	/* RX array to be read */
 	size_t i, j, len = 4;	/* length of data to be TX */
 	enum spi_result res;
 
 	/* set slave info */
-	dspi_data.slave_bus		= 3;
+	dspi_data.slave_bus		= 2;
 	dspi_data.slave_cs		= 0;
 	dspi_data.slave_speed_max_hz = 1000000;
 	dspi_data.slave_mode	= 3;
 	dspi_data.slave_data_size_bits = 8;
+	dspi_data.ctar_val = DSPI_CTAR_DEFAULT_VALUE;
+	dspi_data.ctar_sel = 0;
 
 	/* Initialise DSPI driver */
 	status = nxp_dspi_init(&dspi_data);
 
 	if (status == TEE_SUCCESS) {
 
-		DMSG("DSPI Base: 0x%lx\n", dspi_data.base);
+		EMSG("DSPI Base: 0x%lx\n", dspi_data.base);
 		dspi_data.chip.ops->end(&dspi_data.chip);	/* stop DSPI controller */
 		dspi_data.chip.ops->configure(&dspi_data.chip);		/* configure DSPI chip instance */
 		dspi_data.chip.ops->start(&dspi_data.chip);	/* start DSPI controller */
