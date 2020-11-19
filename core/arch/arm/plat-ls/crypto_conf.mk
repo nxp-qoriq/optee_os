@@ -22,6 +22,9 @@ CFG_DBG_CAAM_TRACE ?= BIT32(1)
 CFG_DBG_CAAM_DESC ?= 0x0
 CFG_DBG_CAAM_BUF ?= 0x0
 
+# Enable the BLOB module used for the hardware unique key
+CFG_NXP_CAAM_BLOB_DRV ?= y
+
 #
 # CAAM Job Ring configuration
 #  - Normal boot settings
