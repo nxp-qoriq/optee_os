@@ -176,3 +176,6 @@ endif
 
 # Cryptographic configuration
 include core/arch/arm/plat-ls/crypto_conf.mk
+
+# Early TAS
+CFG_IN_TREE_EARLY_TAS += avb/023f8f1a-292a-432b-8fc4-de8471358067
