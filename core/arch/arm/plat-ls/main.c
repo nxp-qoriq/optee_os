@@ -60,7 +60,7 @@ static struct ns16550_data console_data;
 register_phys_mem_pgdir(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE,
 			CORE_MMU_PGDIR_SIZE);
 
-#if !defined(PLATFORM_FLAVOR_lx2160aqds) && !defined(CFG_DT)
+#if !defined(PLATFORM_FLAVOR_lx2160aqds)
 register_phys_mem_pgdir(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_PGDIR_SIZE);
 #endif
 

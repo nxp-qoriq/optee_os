@@ -36,6 +36,9 @@ srcs-$(CFG_NXP_GPIO) += nxp_gpio.c
 srcs-$(CFG_NXP_GPIO_TEST) += nxp_gpio_test.c
 srcs-$(CFG_NXP_DSPI) += nxp_dspi.c
 srcs-$(CFG_NXP_DSPI_TEST) += nxp_dspi_test.c
+srcs-$(CFG_NXP_LS_I2C) += nxp_ls_i2c.c
+srcs-$(CFG_NXP_I2C_TEST) += nxp_ls_i2c_test.c
+
 
 subdirs-y += crypto
 subdirs-$(CFG_BNXT_FW) += bnxt
