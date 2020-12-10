@@ -105,7 +105,7 @@ static void dspi_tx(struct nxp_dspi_data *dspi_data, uint32_t ctrl,
 	/* wait for empty entries in TXFIFO or timeout */
 	while (DSPI_SR_TXCTR(io_read32(dspi_data->base + DSPI_SR)) >= 4 &&
 	       timeout--)
-		mdelay(1000);
+		udelay(1);
 
 	if (timeout >= 0)
 		io_write32(dspi_val_addr, dspi_val);
@@ -122,7 +122,7 @@ static uint16_t dspi_rx(struct nxp_dspi_data *dspi_data)
 	/* wait for valid entries in RXFIFO or timeout */
 	while (DSPI_SR_RXCTR(io_read32(dspi_data->base + DSPI_SR)) == 0 &&
 	       timeout--)
-		mdelay(1000);
+		udelay(1);
 
 	if (timeout >= 0)
 		return (uint16_t)DSPI_RFR_RXDATA(io_read32(dspi_val_addr));
